@@ -35,6 +35,11 @@ class Dataset(torch.utils.data.Dataset):
         self._use_labels = use_labels
         self._raw_labels = None
         self._label_shape = None
+        self._use_cam_param = True
+
+        if self._use_cam_param:
+            with open('./datasets/ffhq_camera_params.json', 'r') as f:
+                self.cam_param_dict = json.load(f)
 
         # Apply max_size.
         self._raw_idx = np.arange(self._raw_shape[0], dtype=np.int64)
@@ -67,6 +72,9 @@ class Dataset(torch.utils.data.Dataset):
     def _load_raw_image(self, raw_idx): # to be overridden by subclass
         raise NotImplementedError
 
+    def _load_image_name(self, raw_idx): # to be overridden by subclass
+        raise NotImplementedError
+
     def _load_raw_labels(self): # to be overridden by subclass
         raise NotImplementedError
 
@@ -90,7 +98,18 @@ class Dataset(torch.utils.data.Dataset):
         if self._xflip[idx]:
             assert image.ndim == 3 # CHW
             image = image[:, :, ::-1]
-        return image.copy(), self.get_label(idx)
+        m2c, c2i = self.get_cam_param(idx)
+        return image.copy(), self.get_label(idx), m2c, c2i
+        # return image.copy(), self.get_label(idx)
+
+    def get_cam_param(self, idx):
+        # TODO 바꾸기
+        # image_name = self._load_image_name(self._raw_idx[idx])
+        image_name = self._load_image_name(self._raw_idx[0])
+        cam_param = self.cam_param_dict[image_name]
+        m2c = np.array(cam_param['m2w']) @ np.array(cam_param['w2c'])
+        c2i = np.array(cam_param['c2i'])
+        return m2c.copy(), c2i.copy()
 
     def get_label(self, idx):
         label = self._get_raw_labels()[self._raw_idx[idx]]
@@ -218,6 +237,9 @@ class ImageFolderDataset(Dataset):
             image = image[:, :, np.newaxis] # HW => HWC
         image = image.transpose(2, 0, 1) # HWC => CHW
         return image
+
+    def _load_image_name(self, raw_idx):
+        return self._image_fnames[raw_idx][12:-4]
 
     def _load_raw_labels(self):
         fname = 'dataset.json'

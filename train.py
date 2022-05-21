@@ -28,7 +28,32 @@ class UserError(Exception):
     pass
 
 #----------------------------------------------------------------------------
+'''
 
+-- Generator 관련
+    - generator는 256 discriminator는 128로 res 고정하기
+    
+-- NeRF + Neural Renderer 관련
+    - 샘플된 view point에서 query 포인트 샘플
+    - tri-plane에서 feature sample
+    - decoder 구현
+    - volume rendering 가져오기
+    - importance sampling
+    
+-- Superres module 관련
+    - per-pixel noise 제거
+-- Discriminator 관련
+    - dual discriminator (인풋 채널 변경 및 인풋 변경)
+    - discriminator에 pose condition
+-- Dataset 관련
+    - cam param 없는 데이터 제거 o
+    - cam param 로드 
+    - cam param 셔플링해서 샘플 o
+    
+-- 그 외
+
+'''
+#----------------------------------------------------------------------------
 def setup_training_loop_kwargs(
     # General options (not included in desc).
     gpus       = None, # Number of GPUs: <int>, default = 1 gpu
