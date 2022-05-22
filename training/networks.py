@@ -8,12 +8,16 @@
 
 import numpy as np
 import torch
+from torch.nn import functional as F
 from torch_utils import misc
 from torch_utils import persistence
 from torch_utils.ops import conv2d_resample
 from torch_utils.ops import upfirdn2d
 from torch_utils.ops import bias_act
 from torch_utils.ops import fma
+from torch_utils.ops import grid_sample_gradfix
+
+from volumetric_rendering import fancy_integration
 
 #----------------------------------------------------------------------------
 
@@ -251,6 +255,34 @@ class MappingNetwork(torch.nn.Module):
 #----------------------------------------------------------------------------
 
 @persistence.persistent_class
+class TriPlaneDecoder(torch.nn.Module):
+    def __init__(self,
+        input_dim=32,
+        c_dim=64,                      # Conditioning label (C) dimensionality, 0 = no label.
+        out_dim=33,
+        lr_multiplier=0.1,     # Learning rate multiplier for the tri-plane decoder.
+    ):
+        super().__init__()
+        self.input_dim = input_dim
+        self.c_dim = c_dim
+        self.activation = torch.nn.Softmax(dim=-1)
+
+        layer0 = FullyConnectedLayer(input_dim, c_dim, activation='linear', lr_multiplier=lr_multiplier)
+        setattr(self, f'fc{0}', layer0)
+        layer1 = FullyConnectedLayer(c_dim, out_dim, activation='linear', lr_multiplier=lr_multiplier)
+        setattr(self, f'fc{1}', layer1)
+
+    def forward(self, x):
+        layer0 = getattr(self, f'fc{0}')
+        layer1 = getattr(self, f'fc{1}')
+        x = layer0(x)
+        x = self.activation(x)
+        x = layer1(x)
+        return x
+
+#----------------------------------------------------------------------------
+
+@persistence.persistent_class
 class SynthesisLayer(torch.nn.Module):
     def __init__(self,
         in_channels,                    # Number of input channels.
@@ -332,7 +364,7 @@ class SynthesisBlock(torch.nn.Module):
         out_channels,                       # Number of output channels.
         w_dim,                              # Intermediate latent (W) dimensionality.
         resolution,                         # Resolution of this block.
-        img_channels,                       # Number of output color channels.
+        feat_channels,                       # Number of output feature channels.
         is_last,                            # Is this the last block?
         architecture        = 'skip',       # Architecture: 'orig', 'skip', 'resnet'.
         resample_filter     = [1,3,3,1],    # Low-pass filter to apply when resampling activations.
@@ -346,7 +378,7 @@ class SynthesisBlock(torch.nn.Module):
         self.in_channels = in_channels
         self.w_dim = w_dim
         self.resolution = resolution
-        self.img_channels = img_channels
+        self.feat_channels = feat_channels
         self.is_last = is_last
         self.architecture = architecture
         self.use_fp16 = use_fp16
@@ -368,7 +400,7 @@ class SynthesisBlock(torch.nn.Module):
         self.num_conv += 1
 
         if is_last or architecture == 'skip':
-            self.torgb = ToRGBLayer(out_channels, img_channels, w_dim=w_dim,
+            self.torgb = ToRGBLayer(out_channels, feat_channels, w_dim=w_dim,
                 conv_clamp=conv_clamp, channels_last=self.channels_last)
             self.num_torgb += 1
 
@@ -407,7 +439,7 @@ class SynthesisBlock(torch.nn.Module):
 
         # ToRGB.
         if img is not None:
-            misc.assert_shape(img, [None, self.img_channels, self.resolution // 2, self.resolution // 2])
+            misc.assert_shape(img, [None, self.feat_channels, self.resolution // 2, self.resolution // 2])
             img = upfirdn2d.upsample2d(img, self.resample_filter)
         if self.is_last or self.architecture == 'skip':
             y = self.torgb(x, next(w_iter), fused_modconv=fused_modconv)
@@ -426,6 +458,8 @@ class SynthesisNetwork(torch.nn.Module):
         w_dim,                      # Intermediate latent (W) dimensionality.
         img_resolution,             # Output image resolution.
         img_channels,               # Number of color channels.
+        feat_channels,
+        feat_res,
         channel_base    = 32768,    # Overall multiplier for the number of channels.
         channel_max     = 512,      # Maximum number of channels in any layer.
         num_fp16_res    = 0,        # Use FP16 for the N highest resolutions.
@@ -435,11 +469,16 @@ class SynthesisNetwork(torch.nn.Module):
         super().__init__()
         self.w_dim = w_dim
         self.img_resolution = img_resolution
-        self.img_resolution_log2 = int(np.log2(img_resolution))
+        self.feat_res = feat_res
+        self.feat_resolution_log2 = int(np.log2(feat_res))
         self.img_channels = img_channels
-        self.block_resolutions = [2 ** i for i in range(2, self.img_resolution_log2 + 1)]
+        self.feat_channels = feat_channels
+        self.feat_channels_div3 = int(feat_channels/3)
+        self.feat2_channels = 33
+        self.tri_plane_decoder = TriPlaneDecoder(input_dim=self.feat_channels_div3)
+        self.block_resolutions = [2 ** i for i in range(2, self.feat_resolution_log2 + 1)]
         channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions}
-        fp16_resolution = max(2 ** (self.img_resolution_log2 + 1 - num_fp16_res), 8)
+        fp16_resolution = max(2 ** (self.feat_resolution_log2 + 1 - num_fp16_res), 8)
 
         self.num_ws = 0
         for res in self.block_resolutions:
@@ -448,13 +487,14 @@ class SynthesisNetwork(torch.nn.Module):
             use_fp16 = (res >= fp16_resolution)
             is_last = (res == self.img_resolution)
             block = SynthesisBlock(in_channels, out_channels, w_dim=w_dim, resolution=res,
-                img_channels=img_channels, is_last=is_last, use_fp16=use_fp16, **block_kwargs)
+                feat_channels=feat_channels, is_last=is_last, use_fp16=use_fp16, **block_kwargs)
             self.num_ws += block.num_conv
             if is_last:
                 self.num_ws += block.num_torgb
             setattr(self, f'b{res}', block)
 
     def forward(self, ws, m2c, c2i, **block_kwargs):
+        batch_size = m2c.shape[0]
         block_ws = []
         with torch.autograd.profiler.record_function('split_ws'):
             misc.assert_shape(ws, [None, self.num_ws, self.w_dim])
@@ -465,11 +505,41 @@ class SynthesisNetwork(torch.nn.Module):
                 block_ws.append(ws.narrow(1, w_idx, block.num_conv + block.num_torgb))
                 w_idx += block.num_conv
 
-        x = img = None
+        x = triplane = None
         for res, cur_ws in zip(self.block_resolutions, block_ws):
             block = getattr(self, f'b{res}')
-            x, img = block(x, img, cur_ws, **block_kwargs)
+            x, triplane = block(x, triplane, cur_ws, **block_kwargs)
+
+        # TODO: cam_param으로 query points sampling
+        # TODO: hierarchical sampling
+        num_samples = 24
+        query_points = torch.randn([batch_size, 3, self.img_resolution, self.img_resolution, num_samples], device=ws.device)
+        z_vals = torch.randn([batch_size, self.img_resolution**2, num_samples, 1], device=ws.device)
+
+        feature_map = self.feature_sample(triplane, query_points)
+        output = self.tri_plane_decoder(feature_map.permute(0, 2, 3, 4, 1).reshape(-1, self.feat_channels_div3)).\
+            reshape(batch_size, num_samples, self.img_resolution * self.img_resolution, self.feat2_channels).permute(0, 2, 1, 3)
+        pixels, depth, weights = fancy_integration(output, z_vals, ws.device)
+        img = pixels[..., :3].reshape(batch_size, self.img_resolution, self.img_resolution, 3).permute(0,3,1,2)
+
+        # TODO: superres module
         return img
+
+    def feature_sample(self, triplane, query_points):
+        xy_plane, xz_plane, yz_plane = triplane.split(int(self.feat_channels / 3), dim=1)
+
+        query_points_xy = torch.cat((query_points[:, 0:1], query_points[:, 1:2]), dim=1)
+        query_points_xz = torch.cat((query_points[:, 0:1], query_points[:, 2:3]), dim=1)
+        query_points_yz = torch.cat((query_points[:, 1:2], query_points[:, 2:3]), dim=1)
+        xy_feature_list = []
+        xz_feature_list = []
+        yz_feature_list = []
+        for z_idx in range(24):
+            xy_feature_list.append(grid_sample_gradfix.grid_sample(xy_plane, query_points_xy[..., z_idx].permute(0, 2, 3, 1)))
+            xz_feature_list.append(grid_sample_gradfix.grid_sample(xz_plane, query_points_xz[..., z_idx].permute(0, 2, 3, 1)))
+            yz_feature_list.append(grid_sample_gradfix.grid_sample(yz_plane, query_points_yz[..., z_idx].permute(0, 2, 3, 1)))
+
+        return torch.stack(xy_feature_list, dim=2) + torch.stack(xz_feature_list, dim=2) + torch.stack(yz_feature_list, dim=2)
 
 #----------------------------------------------------------------------------
 
@@ -479,6 +549,8 @@ class Generator(torch.nn.Module):
         z_dim,                      # Input latent (Z) dimensionality.
         c_dim,                      # Conditioning label (C) dimensionality.
         w_dim,                      # Intermediate latent (W) dimensionality.
+        feat_channels,
+        feat_res,                   # Intermediate feature resolution.
         img_resolution,             # Output resolution.
         img_channels,               # Number of output color channels.
         mapping_kwargs      = {},   # Arguments for MappingNetwork.
@@ -488,9 +560,11 @@ class Generator(torch.nn.Module):
         self.z_dim = z_dim
         self.c_dim = c_dim
         self.w_dim = w_dim
+        self.feat_channels = feat_channels
+        self.feat_res = feat_res
         self.img_resolution = img_resolution
         self.img_channels = img_channels
-        self.synthesis = SynthesisNetwork(w_dim=w_dim, img_resolution=img_resolution, img_channels=img_channels, **synthesis_kwargs)
+        self.synthesis = SynthesisNetwork(w_dim=w_dim, img_resolution=img_resolution, img_channels=img_channels, feat_channels=feat_channels, feat_res=feat_res, **synthesis_kwargs)
         self.num_ws = self.synthesis.num_ws
         self.mapping = MappingNetwork(z_dim=z_dim, c_dim=c_dim, w_dim=w_dim, num_ws=self.num_ws, **mapping_kwargs)
 
