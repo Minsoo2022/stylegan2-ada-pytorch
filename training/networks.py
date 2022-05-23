@@ -265,9 +265,9 @@ class TriPlaneDecoder(torch.nn.Module):
         super().__init__()
         self.input_dim = input_dim
         self.c_dim = c_dim
-        self.activation = torch.nn.Softmax(dim=-1)
-
-        layer0 = FullyConnectedLayer(input_dim, c_dim, activation='linear', lr_multiplier=lr_multiplier)
+        # self.activation = torch.nn.Softmax(dim=-1)
+        # TODO: softmax
+        layer0 = FullyConnectedLayer(input_dim, c_dim, activation='lrelu', lr_multiplier=lr_multiplier)
         setattr(self, f'fc{0}', layer0)
         layer1 = FullyConnectedLayer(c_dim, out_dim, activation='linear', lr_multiplier=lr_multiplier)
         setattr(self, f'fc{1}', layer1)
@@ -276,7 +276,7 @@ class TriPlaneDecoder(torch.nn.Module):
         layer0 = getattr(self, f'fc{0}')
         layer1 = getattr(self, f'fc{1}')
         x = layer0(x)
-        x = self.activation(x)
+        # x = self.activation(x)
         x = layer1(x)
         return x
 
@@ -532,7 +532,9 @@ class SynthesisNetwork(torch.nn.Module):
         feature_map = self.feature_sample(triplane, query_points)
         # output = self.tri_plane_decoder(feature_map.permute(0, 2, 3, 4, 1).reshape(-1, self.triplane_channels_div3)).\
         #     reshape(batch_size, num_samples, self.feat_res * self.feat_res, self.feat_channels).permute(0, 2, 1, 3)
-        output = self.tri_plane_decoder(feature_map.reshape(-1, self.triplane_channels_div3)).\
+        # output = self.tri_plane_decoder(feature_map.reshape(-1, self.triplane_channels_div3)).\
+        #     reshape(batch_size, num_samples, self.feat_res * self.feat_res, self.feat_channels).permute(0, 2, 1, 3)
+        output = self.tri_plane_decoder(feature_map.permute(0,2,3,4,1).reshape(-1, self.triplane_channels_div3)). \
             reshape(batch_size, num_samples, self.feat_res * self.feat_res, self.feat_channels).permute(0, 2, 1, 3)
         pixels, depth, weights = fancy_integration(output, z_vals, ws.device)
         img = pixels[..., :3].reshape(batch_size, self.feat_res, self.feat_res, 3).permute(0,3,1,2)
