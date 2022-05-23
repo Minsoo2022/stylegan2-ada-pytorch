@@ -93,7 +93,9 @@ def get_i2m(intrinsics, extrinsics):
     intrinsics_4x4[:, :3, :3] = intrinsics[:, :3, :3]
     intrinsics_4x4[:, 3, 3] = 1
 
-    return torch.linalg.inv(torch.bmm(intrinsics_4x4, extrinsics))
+    # return torch.linalg.inv(torch.bmm(intrinsics_4x4, extrinsics))
+    return torch.inverse(torch.bmm(intrinsics_4x4, extrinsics))
+
 
 
 # https://github.com/marcoamonteiro/pi-GAN/blob/master/generators/volumetric_rendering.py#L205

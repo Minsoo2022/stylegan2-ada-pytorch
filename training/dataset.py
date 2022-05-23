@@ -38,7 +38,7 @@ class Dataset(torch.utils.data.Dataset):
         self._use_cam_param = True
 
         if self._use_cam_param:
-            with open('./datasets/ffhq_camera_params.json', 'r') as f:
+            with open('./ffhq_camera_params.json', 'r') as f:
                 self.cam_param_dict = json.load(f)
 
         # Apply max_size.
@@ -103,9 +103,8 @@ class Dataset(torch.utils.data.Dataset):
         # return image.copy(), self.get_label(idx)
 
     def get_cam_param(self, idx):
-        # TODO 바꾸기
-        # image_name = self._load_image_name(self._raw_idx[idx])
-        image_name = self._load_image_name(self._raw_idx[0])
+        image_name = self._load_image_name(self._raw_idx[idx])
+        # image_name = self._load_image_name(self._raw_idx[0])
         cam_param = self.cam_param_dict[image_name]
         m2c = np.array(cam_param['m2w']) @ np.array(cam_param['w2c'])
         c2i = np.array(cam_param['c2i'])
@@ -239,7 +238,8 @@ class ImageFolderDataset(Dataset):
         return image
 
     def _load_image_name(self, raw_idx):
-        return self._image_fnames[raw_idx][12:-4]
+        # return sself._image_fnames[raw_idx][:-4]elf._image_fnames[raw_idx][12:-4]
+        return self._image_fnames[raw_idx][:-4]
 
     def _load_raw_labels(self):
         fname = 'dataset.json'

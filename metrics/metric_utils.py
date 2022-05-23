@@ -212,7 +212,7 @@ def compute_feature_stats_for_dataset(opts, detector_url, detector_kwargs, rel_l
 
     # Main loop.
     item_subset = [(i * opts.num_gpus + opts.rank) % num_items for i in range((num_items - 1) // opts.num_gpus + 1)]
-    for images, _labels in torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size, **data_loader_kwargs):
+    for images, _labels, _m2c, _c2i in torch.utils.data.DataLoader(dataset=dataset, sampler=item_subset, batch_size=batch_size, **data_loader_kwargs):
         if images.shape[1] == 1:
             images = images.repeat([1, 3, 1, 1])
         features = detector(images.to(opts.device), **detector_kwargs)
@@ -239,8 +239,8 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
     dataset = dnnlib.util.construct_class_by_name(**opts.dataset_kwargs)
 
     # Image generation func.
-    def run_generator(z, c):
-        img = G(z=z, c=c, **opts.G_kwargs)
+    def run_generator(z, c, m2c, c2i):
+        img = G(z=z, c=c, m2c=m2c, c2i=c2i, **opts.G_kwargs)
         img = (img * 127.5 + 128).clamp(0, 255).to(torch.uint8)
         return img
 
@@ -248,7 +248,9 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
     if jit:
         z = torch.zeros([batch_gen, G.z_dim], device=opts.device)
         c = torch.zeros([batch_gen, G.c_dim], device=opts.device)
-        run_generator = torch.jit.trace(run_generator, [z, c], check_trace=False)
+        m2c = torch.eye(4, 4, device=opts.device)[None,].repeat(batch_gen, 1, 1)
+        c2i = torch.eye(3, 4, device=opts.device)[None,].repeat(batch_gen, 1, 1)
+        run_generator = torch.jit.trace(run_generator, [z, c, m2c, c2i], check_trace=False)
 
     # Initialize.
     stats = FeatureStats(**stats_kwargs)
@@ -263,7 +265,14 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
             z = torch.randn([batch_gen, G.z_dim], device=opts.device)
             c = [dataset.get_label(np.random.randint(len(dataset))) for _i in range(batch_gen)]
             c = torch.from_numpy(np.stack(c)).pin_memory().to(opts.device)
-            images.append(run_generator(z, c))
+
+            cam = [dataset.get_cam_param(np.random.randint(len(dataset))) for _i in range(batch_gen)]
+            m2c = [m2c for m2c, c2i in cam]
+            c2i = [c2i for m2c, c2i in cam]
+            m2c = torch.from_numpy(np.stack(m2c)).pin_memory().to(opts.device)
+            c2i = torch.from_numpy(np.stack(c2i)).pin_memory().to(opts.device)
+
+            images.append(run_generator(z, c, m2c, c2i))
         images = torch.cat(images)
         if images.shape[1] == 1:
             images = images.repeat([1, 3, 1, 1])

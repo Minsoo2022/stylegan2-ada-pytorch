@@ -163,8 +163,8 @@ def training_loop(
     if rank == 0:
         z = torch.empty([batch_gpu, G.z_dim], device=device)
         c = torch.empty([batch_gpu, G.c_dim], device=device)
-        m2c = torch.empty([batch_gpu, 4, 4], device=device)
-        c2i = torch.empty([batch_gpu, 3, 4], device=device)
+        m2c = torch.eye(4, 4, device=device)[None,].repeat(batch_gpu,1,1)
+        c2i = torch.eye(3,4,device=device)[None,].repeat(batch_gpu,1,1)
         img = misc.print_module_summary(G, [z, c, m2c, c2i])
         misc.print_module_summary(D, [img, c, m2c, c2i])
 
@@ -226,8 +226,8 @@ def training_loop(
         # save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
         grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
         grid_c = torch.from_numpy(labels).to(device).split(batch_gpu)
-        grid_m2c = torch.from_numpy(labels).to(device).split(batch_gpu)
-        grid_c2i = torch.from_numpy(labels).to(device).split(batch_gpu)
+        grid_m2c = torch.from_numpy(m2cs).to(device).split(batch_gpu)
+        grid_c2i = torch.from_numpy(c2is).to(device).split(batch_gpu)
         images = torch.cat([G_ema(z=z, c=c, m2c=m2c, c2i=c2i, noise_mode='const').cpu() for z, c, m2c, c2i in zip(grid_z, grid_c, grid_m2c, grid_c2i)]).numpy()
         # TODO
         # save_image_grid(images, os.path.join(run_dir, 'fakes_init.png'), drange=[-1,1], grid_size=grid_size)
