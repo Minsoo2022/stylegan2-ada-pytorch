@@ -265,9 +265,9 @@ class TriPlaneDecoder(torch.nn.Module):
         super().__init__()
         self.input_dim = input_dim
         self.c_dim = c_dim
-        self.activation = torch.nn.Softmax(dim=-1)
-
-        layer0 = FullyConnectedLayer(input_dim, c_dim, activation='linear', lr_multiplier=lr_multiplier)
+        # self.activation = torch.nn.Softmax(dim=-1)
+        # TODO: softmax
+        layer0 = FullyConnectedLayer(input_dim, c_dim, activation='lrelu', lr_multiplier=lr_multiplier)
         setattr(self, f'fc{0}', layer0)
         layer1 = FullyConnectedLayer(c_dim, out_dim, activation='linear', lr_multiplier=lr_multiplier)
         setattr(self, f'fc{1}', layer1)
@@ -276,7 +276,7 @@ class TriPlaneDecoder(torch.nn.Module):
         layer0 = getattr(self, f'fc{0}')
         layer1 = getattr(self, f'fc{1}')
         x = layer0(x)
-        x = self.activation(x)
+        # x = self.activation(x)
         x = layer1(x)
         return x
 
@@ -479,7 +479,8 @@ class SynthesisNetwork(torch.nn.Module):
         self.feat_channels = feat_channels
         self.feat_res = feat_res
         self.sup_res_log2 = int(np.log2(img_resolution/feat_res))
-        self.tri_plane_decoder = TriPlaneDecoder(input_dim=self.triplane_channels_div3)
+        # self.tri_plane_decoder = TriPlaneDecoder(input_dim=self.triplane_channels_div3)
+        self.tri_plane_decoder = TriPlaneDecoder(input_dim=triplane_channels)
         self.block_resolutions = [2 ** i for i in range(2, self.triplane_resolution_log2 + 1)]
         self.sup_block_resolutions = [2 ** i for i in range(int(np.log2(feat_res)) + 1, int(np.log2(img_resolution)) + 1)]
         channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions}
@@ -519,23 +520,28 @@ class SynthesisNetwork(torch.nn.Module):
         # TODO: hierarchical sampling
         num_samples = 24
 
-        points, z_vals, rays_d_image = get_initial_rays_image(batch_size, num_samples, ws.device, (self.feat_res, self.feat_res), 1.4, 2.6)
-        # rays_d_image (batch/ res*res/ 3) 3-> (u,v,1)
-        # z_vals batch/res*res/num_sample/1
-        # points batch/res*res/num_sample/3
-        i2m = get_i2m(c2i, m2c)
-        origin, direction, query_points = transform_points(i2m.float(), rays_d_image, points)
-        query_points = query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, num_samples)
-        # query_points = torch.randn([batch_size, 3, self.feat_res, self.feat_res, num_samples], device=ws.device)
-        # z_vals = torch.randn([batch_size, self.feat_res**2, num_samples, 1], device=ws.device)
-
-        feature_map = self.feature_sample(triplane, query_points)
-        # output = self.tri_plane_decoder(feature_map.permute(0, 2, 3, 4, 1).reshape(-1, self.triplane_channels_div3)).\
+        # points, z_vals, rays_d_image = get_initial_rays_image(batch_size, num_samples, ws.device, (self.feat_res, self.feat_res), 1.4, 2.6)
+        # # rays_d_image (batch/ res*res/ 3) 3-> (u,v,1)
+        # # z_vals batch/res*res/num_sample/1
+        # # points batch/res*res/num_sample/3
+        # i2m = get_i2m(c2i, m2c)
+        # origin, direction, query_points = transform_points(i2m.float(), rays_d_image, points)
+        # query_points = query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, num_samples)
+        # # query_points = torch.randn([batch_size, 3, self.feat_res, self.feat_res, num_samples], device=ws.device)
+        # # z_vals = torch.randn([batch_size, self.feat_res**2, num_samples, 1], device=ws.device)
+        #
+        # feature_map = self.feature_sample(triplane, query_points)
+        # # output = self.tri_plane_decoder(feature_map.permute(0, 2, 3, 4, 1).reshape(-1, self.triplane_channels_div3)).\
+        # #     reshape(batch_size, num_samples, self.feat_res * self.feat_res, self.feat_channels).permute(0, 2, 1, 3)
+        # output = self.tri_plane_decoder(feature_map.reshape(-1, self.triplane_channels_div3)).\
         #     reshape(batch_size, num_samples, self.feat_res * self.feat_res, self.feat_channels).permute(0, 2, 1, 3)
-        output = self.tri_plane_decoder(feature_map.reshape(-1, self.triplane_channels_div3)).\
-            reshape(batch_size, num_samples, self.feat_res * self.feat_res, self.feat_channels).permute(0, 2, 1, 3)
-        pixels, depth, weights = fancy_integration(output, z_vals, ws.device)
-        img = pixels[..., :3].reshape(batch_size, self.feat_res, self.feat_res, 3).permute(0,3,1,2)
+        # pixels, depth, weights = fancy_integration(output, z_vals, ws.device)
+        # img = pixels[..., :3].reshape(batch_size, self.feat_res, self.feat_res, 3).permute(0,3,1,2)
+
+        output = self.tri_plane_decoder(triplane.reshape(-1, self.triplane_channels)).\
+            reshape(batch_size, self.feat_channels, self.feat_res, self.feat_res)
+        
+        img = output[:,:3]
 
         # TODO: superres module
         return img
