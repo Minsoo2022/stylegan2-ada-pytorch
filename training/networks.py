@@ -17,7 +17,7 @@ from torch_utils.ops import bias_act
 from torch_utils.ops import fma
 from torch_utils.ops import grid_sample_gradfix
 
-from volumetric_rendering import fancy_integration, get_initial_rays_image, get_i2m, transform_points, sample_pdf
+from volumetric_rendering import fancy_integration, get_initial_rays_image, get_i2m, transform_points, sample_pdf, get_initial_rays_trig, transform_sampled_points
 
 #----------------------------------------------------------------------------
 
@@ -517,25 +517,50 @@ class SynthesisNetwork(torch.nn.Module):
 
         # TODO: cam_param으로 query points sampling
         # TODO: hierarchical sampling
-        num_samples = 24
+        num_steps = 24
+        fov = 12
+        ray_start = 0.88
+        ray_end = 1.12
+        img_size = self.feat_res
+        h_stddev = 0.3
+        v_stddev = 1.55
+        h_mean = 1.57
+        v_mean = 1.57
+        sample_dist = 'gaussian'
 
-        points, z_vals, rays_d_image = get_initial_rays_image(batch_size, num_samples, ws.device, (self.feat_res, self.feat_res), 1.4, 2.6)
-        # rays_d_image (batch/ res*res/ 3) 3-> (u,v,1)
-        # z_vals batch/res*res/num_sample/1
-        # points batch/res*res/num_sample/3
+
+        points_cam, z_vals, rays_d_cam = get_initial_rays_trig(batch_size, num_steps, resolution=(img_size, img_size),
+                                                               device=ws.device, fov=fov, ray_start=ray_start,
+                                                               ray_end=ray_end)  # batch_size, pixels, num_steps, 1
+        transformed_points, z_vals, transformed_ray_directions, transformed_ray_origins, pitch, yaw = transform_sampled_points(
+            points_cam, z_vals, rays_d_cam, h_stddev=h_stddev, v_stddev=v_stddev, h_mean=h_mean, v_mean=v_mean,
+            device=ws.device, mode=sample_dist)
+
+        transformed_ray_directions_expanded = torch.unsqueeze(transformed_ray_directions, -2)
+        transformed_ray_directions_expanded = transformed_ray_directions_expanded.expand(-1, -1, num_steps, -1)
+        transformed_ray_directions_expanded = transformed_ray_directions_expanded.reshape(batch_size,
+                                                                                          img_size * img_size * num_steps,
+                                                                                          3)
+
+        transformed_points = transformed_points.reshape(batch_size, img_size, img_size, num_steps, 3).permute(0,4,1,2,3)
+        transformed_points = transformed_points * 5
+        # transformed_points = transformed_points.reshape(batch_size, img_size * img_size * num_steps, 3)
+
+
+#-----------------------------------------
+        points, z_vals_, rays_d_image = get_initial_rays_image(batch_size, num_steps, ws.device, (self.feat_res, self.feat_res), 1.4, 2.6)
         i2m = get_i2m(c2i, m2c)
         origin, direction, query_points = transform_points(i2m.float(), rays_d_image, points)
-        query_points = query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, num_samples)
-        # query_points = torch.randn([batch_size, 3, self.feat_res, self.feat_res, num_samples], device=ws.device)
-        # z_vals = torch.randn([batch_size, self.feat_res**2, num_samples, 1], device=ws.device)
+        query_points = query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, num_steps)
+# -----------------------------------------
 
-        feature_map = self.feature_sample(triplane, query_points)
+        feature_map = self.feature_sample(triplane, transformed_points)
         # output = self.tri_plane_decoder(feature_map.permute(0, 2, 3, 4, 1).reshape(-1, self.triplane_channels_div3)).\
         #     reshape(batch_size, num_samples, self.feat_res * self.feat_res, self.feat_channels).permute(0, 2, 1, 3)
         # output = self.tri_plane_decoder(feature_map.reshape(-1, self.triplane_channels_div3)).\
         #     reshape(batch_size, num_samples, self.feat_res * self.feat_res, self.feat_channels).permute(0, 2, 1, 3)
         output = self.tri_plane_decoder(feature_map.permute(0,2,3,4,1).reshape(-1, self.triplane_channels_div3)). \
-            reshape(batch_size, num_samples, self.feat_res * self.feat_res, self.feat_channels).permute(0, 2, 1, 3)
+            reshape(batch_size, num_steps, self.feat_res * self.feat_res, self.feat_channels).permute(0, 2, 1, 3)
         pixels, depth, weights = fancy_integration(output, z_vals, ws.device)
         img = pixels[..., :3].reshape(batch_size, self.feat_res, self.feat_res, 3).permute(0,3,1,2)
 
