@@ -482,9 +482,10 @@ class SynthesisNetwork(torch.nn.Module):
         self.triplane_channels_div3 = int(triplane_channels/3)
         self.feat_channels = feat_channels
         self.feat_res = feat_res
-        # self.feat2_channels = 33
+        self.sup_res_log2 = int(np.log2(img_resolution/feat_res))
         self.tri_plane_decoder = TriPlaneDecoder(input_dim=self.triplane_channels_div3)
         self.block_resolutions = [2 ** i for i in range(2, self.triplane_resolution_log2 + 1)]
+        self.sup_block_resolutions = [2 ** i for i in range(int(np.log2(feat_res)) + 1, int(np.log2(img_resolution)) + 1)]
         channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions}
         fp16_resolution = max(2 ** (self.triplane_resolution_log2 + 1 - num_fp16_res), 8)
 
@@ -501,9 +502,22 @@ class SynthesisNetwork(torch.nn.Module):
                 self.num_ws += block.num_torgb
             setattr(self, f'b{res}', block)
 
+        out_channels = feat_res
+        for i, res in enumerate(self.sup_block_resolutions):
+            in_channels = out_channels
+            out_channels = 128 if i == 0 else 64
+            is_last = (res == self.img_resolution)
+            block = SynthesisBlock(in_channels, out_channels, w_dim=w_dim, resolution=res,
+                triplane_channels=img_channels, is_last=is_last, use_fp16=False, use_noise=False, **block_kwargs)
+            self.num_ws += block.num_conv
+            if is_last:
+                self.num_ws += block.num_torgb
+            setattr(self, f'sup_b{res}', block)
+
     def forward(self, ws, m2c, c2i, **block_kwargs):
         batch_size = m2c.shape[0]
         block_ws = []
+        sup_block_ws = []
         with torch.autograd.profiler.record_function('split_ws'):
             misc.assert_shape(ws, [None, self.num_ws, self.w_dim])
             ws = ws.to(torch.float32)
@@ -512,6 +526,11 @@ class SynthesisNetwork(torch.nn.Module):
                 block = getattr(self, f'b{res}')
                 block_ws.append(ws.narrow(1, w_idx, block.num_conv + block.num_torgb))
                 w_idx += block.num_conv
+
+            for res in self.sup_block_resolutions:
+                sup_block = getattr(self, f'sup_b{res}')
+                sup_block_ws.append(ws.narrow(1, w_idx, sup_block.num_conv + sup_block.num_torgb))
+                w_idx += sup_block.num_conv
 
         x = triplane = None
         for res, cur_ws in zip(self.block_resolutions, block_ws):
@@ -552,7 +571,13 @@ class SynthesisNetwork(torch.nn.Module):
         feature_map = self.feature_sample(triplane, transformed_points)
         output = self.tri_plane_decoder(feature_map).permute(0, 2, 1, 3)
         pixels, depth, weights = fancy_integration(output, z_vals, ws.device)
-        img = pixels[..., :3].reshape(batch_size, self.feat_res, self.feat_res, 3).permute(0,3,1,2)
+        pixels = pixels.reshape(batch_size, self.feat_res, self.feat_res, self.feat_channels-1).permute(0,3,1,2)
+        low_img = pixels[:, :3]
+
+        img = None
+        for res, cur_ws in zip(self.sup_block_resolutions, sup_block_ws):
+            sup_block = getattr(self, f'sup_b{res}')
+            pixels, img = sup_block(pixels, img, cur_ws, **block_kwargs)
 
         # TODO: superres module
         return img
