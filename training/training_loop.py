@@ -25,6 +25,11 @@ from torch_utils.ops import upfirdn2d
 import legacy
 from metrics import metric_main
 
+sym6 =[0.015404109327027373, 0.0034907120842174702, -0.11799011114819057, -0.048311742585633, 0.4910559419267466,
+         0.787641141030194, 0.3379294217276218, -0.07263752278646252, -0.021060292512300564, 0.04472490177066578,
+         0.0017677118642428036, -0.007800708325034148]
+Hz_geom = upfirdn2d.setup_filter(sym6)
+
 #----------------------------------------------------------------------------
 
 def setup_snapshot_image_grid(training_set, random_seed=0):
@@ -231,7 +236,7 @@ def training_loop(
         grid_c2i = torch.from_numpy(c2is).to(device).split(batch_gpu)
         images = torch.cat([G_ema(z=z, c=c, m2c=m2c, c2i=c2i, noise_mode='const').cpu() for z, c, m2c, c2i in zip(grid_z, grid_c, grid_m2c, grid_c2i)]).numpy()
         # TODO
-        # save_image_grid(images, os.path.join(run_dir, 'fakes_init.png'), drange=[-1,1], grid_size=grid_size)
+        # save_image_grid(images[:,:training_set.num_channels], os.path.join(run_dir, 'fakes_init.png'), drange=[-1,1], grid_size=grid_size)
 
     # Initialize logs.
     if rank == 0:
@@ -265,7 +270,13 @@ def training_loop(
         # Fetch training data.
         with torch.autograd.profiler.record_function('data_fetch'):
             phase_real_img, phase_real_c, phase_real_m2c, phase_real_c2i = next(training_set_iterator)
-            phase_real_img = (phase_real_img.to(device).to(torch.float32) / 127.5 - 1).split(batch_gpu)
+            phase_real_img = (phase_real_img.to(device).to(torch.float32) / 127.5 - 1)
+            phase_real_img_ori = phase_real_img.clone()
+            low_path_filter = Hz_geom.to(device)
+            phase_real_img = upfirdn2d.downsample2d(x=phase_real_img, f=low_path_filter, down=4)
+            phase_real_img = upfirdn2d.upsample2d(x=phase_real_img, f=low_path_filter, up=4)
+            phase_real_img = torch.cat([phase_real_img_ori, phase_real_img], dim=1)
+            phase_real_img = phase_real_img.split(batch_gpu)
             phase_real_c = phase_real_c.to(device).split(batch_gpu)
             phase_real_m2c = phase_real_m2c.to(device).split(batch_gpu)
             phase_real_c2i = phase_real_c2i.to(device).split(batch_gpu)
@@ -364,7 +375,7 @@ def training_loop(
         # Save image snapshot.
         if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
             images = torch.cat([G_ema(z=z, c=c, m2c=m2c, c2i=c2i, noise_mode='const').cpu() for z, c, m2c, c2i in zip(grid_z, grid_c, grid_m2c, grid_c2i)]).numpy()
-            save_image_grid(images, os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
+            save_image_grid(images[:,:training_set.num_channels], os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
 
         # Save network snapshot.
         snapshot_pkl = None

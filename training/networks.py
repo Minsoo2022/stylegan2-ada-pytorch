@@ -477,7 +477,8 @@ class SynthesisNetwork(torch.nn.Module):
         self.img_resolution = img_resolution
         self.triplane_res = triplane_res
         self.triplane_resolution_log2 = int(np.log2(triplane_res))
-        self.img_channels = img_channels
+        # self.img_channels = img_channels
+        self.img_channels = 3
         self.triplane_channels = triplane_channels
         self.triplane_channels_div3 = int(triplane_channels/3)
         self.feat_channels = feat_channels
@@ -488,6 +489,11 @@ class SynthesisNetwork(torch.nn.Module):
         self.sup_block_resolutions = [2 ** i for i in range(int(np.log2(feat_res)) + 1, int(np.log2(img_resolution)) + 1)]
         channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions}
         fp16_resolution = max(2 ** (self.triplane_resolution_log2 + 1 - num_fp16_res), 8)
+        sym6 = [0.015404109327027373, 0.0034907120842174702, -0.11799011114819057, -0.048311742585633,
+                0.4910559419267466,
+                0.787641141030194, 0.3379294217276218, -0.07263752278646252, -0.021060292512300564, 0.04472490177066578,
+                0.0017677118642428036, -0.007800708325034148]
+        self.register_buffer('Hz_geom', upfirdn2d.setup_filter(sym6))
 
         self.num_ws = 0
         for res in self.block_resolutions:
@@ -578,9 +584,9 @@ class SynthesisNetwork(torch.nn.Module):
         for res, cur_ws in zip(self.sup_block_resolutions, sup_block_ws):
             sup_block = getattr(self, f'sup_b{res}')
             pixels, img = sup_block(pixels, img, cur_ws, **block_kwargs)
-
+        upsampled_img = upfirdn2d.upsample2d(x=low_img, f=self.Hz_geom.to(ws.device), up=4)
         # TODO: superres module
-        return img
+        return torch.cat([img, upsampled_img], dim=1)
 
     def feature_sample(self, triplane, query_points):
         xy_plane, xz_plane, yz_plane = triplane.split(int(self.triplane_channels / 3), dim=1)
@@ -658,6 +664,7 @@ class DiscriminatorBlock(torch.nn.Module):
         super().__init__()
         self.in_channels = in_channels
         self.resolution = resolution
+        img_channels = img_channels * 2
         self.img_channels = img_channels
         self.first_layer_idx = first_layer_idx
         self.architecture = architecture
