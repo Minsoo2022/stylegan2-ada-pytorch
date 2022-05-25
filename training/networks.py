@@ -568,9 +568,10 @@ class SynthesisNetwork(torch.nn.Module):
         transformed_points = query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, num_steps)
 
         feature_map = self.feature_sample(triplane, transformed_points)
-        output = self.tri_plane_decoder(feature_map).permute(0, 2, 1, 3)
+        # output = self.tri_plane_decoder(feature_map).permute(0, 2, 1, 3)
         if importance_sampling:
             with torch.no_grad():
+                output = self.tri_plane_decoder(feature_map).permute(0, 2, 1, 3)
                 _, _, weights = fancy_integration(output, z_vals, ws.device)
                 weights = weights.reshape(batch_size * self.feat_res * self.feat_res, num_steps) + 1e-5
                 z_vals = z_vals.reshape(batch_size * self.feat_res * self.feat_res, num_steps)
@@ -581,16 +582,24 @@ class SynthesisNetwork(torch.nn.Module):
                 fine_query_points = origin + direction * fine_z_vals
                 fine_query_points = fine_query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, num_steps)
 
+            # TODO: check ddp consistency
             fine_feature_map = self.feature_sample(triplane, fine_query_points)
-            fine_output = self.tri_plane_decoder(fine_feature_map).permute(0, 2, 1, 3)
-
-            all_output = torch.cat([fine_output, output], dim = -2)
-            all_z_vals = torch.cat([fine_z_vals, z_vals], dim = -2)
+            # fine_output = self.tri_plane_decoder(fine_feature_map).permute(0, 2, 1, 3)
+            #
+            # all_output = torch.cat([fine_output, output], dim = -2)
+            # all_z_vals = torch.cat([fine_z_vals, z_vals], dim = -2)
+            self.tri_plane_decoder.train()
+            fine_coarse_output = self.tri_plane_decoder(torch.cat([fine_feature_map, feature_map], dim=2)).permute(0, 2, 1, 3)
+            fine_output = fine_coarse_output[:, :, :num_steps]
+            output = fine_coarse_output[:, :, num_steps:]
+            all_output = torch.cat([fine_output, output], dim=-2)
+            all_z_vals = torch.cat([fine_z_vals, z_vals], dim=-2)
             _, indices = torch.sort(all_z_vals, dim=-2)
             all_z_vals = torch.gather(all_z_vals, -2, indices)
             all_output = torch.gather(all_output, -2, indices.expand(-1, -1, -1, self.feat_channels))
 
         else:
+            output = self.tri_plane_decoder(feature_map).permute(0, 2, 1, 3)
             all_output = output
             all_z_vals = z_vals
 
