@@ -200,12 +200,20 @@ class MappingNetwork(torch.nn.Module):
             embed_features = w_dim
         if c_dim == 0:
             embed_features = 0
+        cam_condition = False
+        self.cam_condition = cam_condition
+        if cam_condition:
+            cam_embed_features = w_dim
+        else:
+            cam_embed_features = 0
         if layer_features is None:
             layer_features = w_dim
-        features_list = [z_dim + embed_features] + [layer_features] * (num_layers - 1) + [w_dim]
+        features_list = [z_dim + embed_features + cam_embed_features] + [layer_features] * (num_layers - 1) + [w_dim]
 
         if c_dim > 0:
             self.embed = FullyConnectedLayer(c_dim, embed_features)
+        if cam_condition > 0:
+            self.cam_embed = FullyConnectedLayer(25, cam_embed_features)
         for idx in range(num_layers):
             in_features = features_list[idx]
             out_features = features_list[idx + 1]
@@ -225,6 +233,11 @@ class MappingNetwork(torch.nn.Module):
             if self.c_dim > 0:
                 misc.assert_shape(c, [None, self.c_dim])
                 y = normalize_2nd_moment(self.embed(c.to(torch.float32)))
+                x = torch.cat([x, y], dim=1) if x is not None else y
+            if self.cam_condition:
+                cam_c = torch.cat([m2c.reshape(-1, 16), c2i[:,:3,:3].reshape(-1, 9)], dim=1)
+                misc.assert_shape(cam_c, [None, 25])
+                y = normalize_2nd_moment(self.cam_embed(cam_c.to(torch.float32)))
                 x = torch.cat([x, y], dim=1) if x is not None else y
 
         # Main layers.
@@ -555,9 +568,9 @@ class SynthesisNetwork(torch.nn.Module):
         transformed_points = query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, num_steps)
 
         feature_map = self.feature_sample(triplane, transformed_points)
+        output = self.tri_plane_decoder(feature_map).permute(0, 2, 1, 3)
         if importance_sampling:
             with torch.no_grad():
-                output = self.tri_plane_decoder(feature_map).permute(0, 2, 1, 3)
                 _, _, weights = fancy_integration(output, z_vals, ws.device)
                 weights = weights.reshape(batch_size * self.feat_res * self.feat_res, num_steps) + 1e-5
                 z_vals = z_vals.reshape(batch_size * self.feat_res * self.feat_res, num_steps)
@@ -578,7 +591,6 @@ class SynthesisNetwork(torch.nn.Module):
             all_output = torch.gather(all_output, -2, indices.expand(-1, -1, -1, self.feat_channels))
 
         else:
-            output = self.tri_plane_decoder(feature_map).permute(0, 2, 1, 3)
             all_output = output
             all_z_vals = z_vals
 
