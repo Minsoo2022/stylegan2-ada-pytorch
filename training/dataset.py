@@ -106,7 +106,7 @@ class Dataset(torch.utils.data.Dataset):
         image_name = self._load_image_name(self._raw_idx[idx])
         # image_name = self._load_image_name(self._raw_idx[0])
         cam_param = self.cam_param_dict[image_name]
-        m2c = np.array(cam_param['m2w']) @ np.array(cam_param['w2c'])
+        m2c = np.array(cam_param['w2c']) @ np.array(cam_param['m2w'])
         c2i = np.array(cam_param['c2i'])
         return m2c.copy(), c2i.copy()
 
