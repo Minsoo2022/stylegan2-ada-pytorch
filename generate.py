@@ -19,7 +19,8 @@ import PIL.Image
 import torch
 
 import legacy
-
+from volumetric_rendering import cal_m2c
+from training.training_loop import save_image_grid
 #----------------------------------------------------------------------------
 
 def num_range(s: str) -> List[int]:
@@ -113,12 +114,22 @@ def generate_images(
             print ('warn: --class=lbl ignored when running on an unconditional network')
 
     # Generate images.
+    theta = [0.2, 0, -0.2]
+    phi = [0, 0, 0]
+    gw = 3
+    gh = 1
+    batch_size = len(theta)
+    c2i =torch.Tensor([[[9.0579, 0.0000, 0.0000, 0.0000],
+         [0.0000, 9.0579, 0.0000, 0.0000],
+         [0.0000, 0.0000, 1.0000, 0.0000]]])
+
     for seed_idx, seed in enumerate(seeds):
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
         z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
-        img = G(z, label, truncation_psi=truncation_psi, noise_mode=noise_mode)
-        img = (img.permute(0, 2, 3, 1) * 127.5 + 128).clamp(0, 255).to(torch.uint8)
-        PIL.Image.fromarray(img[0].cpu().numpy(), 'RGB').save(f'{outdir}/seed{seed:04d}.png')
+        c2i = c2i.repeat(batch_size, 1, 1).to(device)
+        m2c = cal_m2c(theta, phi).to(device)
+        img = G(z, label, m2c, c2i,truncation_psi=truncation_psi, noise_mode=noise_mode)
+        save_image_grid(img[:,:3].cpu(), f'{outdir}/seed{seed:04d}.png', drange=[-1,1], grid_size=(gw, gh))
 
 
 #----------------------------------------------------------------------------

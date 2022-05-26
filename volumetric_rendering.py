@@ -297,3 +297,38 @@ def create_world2cam_matrix(forward_vector, origin):
     cam2world = create_cam2world_matrix(forward_vector, origin, device=device)
     world2cam = torch.inverse(cam2world)
     return world2cam
+
+
+trans_t = lambda t : torch.Tensor([
+    [1,0,0,t[0]],
+    [0,1,0,t[1]],
+    [0,0,1,t[2]],
+    [0,0,0,1]]).float()
+
+rot_theta = lambda th : torch.Tensor([
+    [np.cos(th),0,-np.sin(th),0],
+    [0,1,0,0],
+    [np.sin(th),0, np.cos(th),0],
+    [0,0,0,1]]).float()
+
+rot_phi = lambda phi : torch.Tensor([
+    [1,0,0,0],
+    [0,np.cos(phi),-np.sin(phi),0],
+    [0,np.sin(phi), np.cos(phi),0],
+    [0,0,0,1]]).float()
+
+def cal_m2c(theta, phi, translation=None):
+    if type(theta) == list:
+        batch_size = len(theta)
+    else:
+        batch_size = theta.shape[0]
+    if translation is None:
+        translation = torch.zeros(batch_size, 3)
+    m2w = torch.stack(list(map(trans_t, translation)))
+    m2w = torch.bmm(m2w,torch.stack(list(map(rot_theta, theta))))
+    m2w = torch.bmm(m2w,torch.stack(list(map(rot_phi, phi))))
+    w2c = torch.Tensor([[[1.,  0.,  0.,  0.],
+                         [0.,  1.,  0.,  0.],
+                         [0.,  0., -1.,  2.],
+                         [0.,  0.,  0.,  1.]]]).repeat(batch_size, 1, 1)
+    return torch.bmm(w2c, m2w)
