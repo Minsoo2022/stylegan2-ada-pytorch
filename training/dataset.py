@@ -27,6 +27,7 @@ class Dataset(torch.utils.data.Dataset):
         raw_shape,              # Shape of the raw image data (NCHW).
         max_size    = None,     # Artificially limit the size of the dataset. None = no limit. Applied before xflip.
         use_labels  = False,    # Enable conditioning labels? False = label dimension is zero.
+        use_cam     = False,    # Enable conditioning camera parameters and sampling with given camera parameters
         xflip       = False,    # Artificially double the size of the dataset via x-flips. Applied after max_size.
         random_seed = 0,        # Random seed to use when applying max_size.
     ):
@@ -35,11 +36,14 @@ class Dataset(torch.utils.data.Dataset):
         self._use_labels = use_labels
         self._raw_labels = None
         self._label_shape = None
-        self._use_cam_param = True
+        self._use_cam = use_cam
 
-        if self._use_cam_param:
-            with open('./ffhq_camera_params.json', 'r') as f:
-                self.cam_param_dict = json.load(f)
+        if self._use_cam:
+            try:
+                with open('./ffhq_camera_params.json', 'r') as f:
+                    self.cam_param_dict = json.load(f)
+            except:
+                raise Exception('--cam=True requires camera parameters in ffhq_camera_params.json')
 
         # Apply max_size.
         self._raw_idx = np.arange(self._raw_shape[0], dtype=np.int64)
@@ -103,12 +107,16 @@ class Dataset(torch.utils.data.Dataset):
         # return image.copy(), self.get_label(idx)
 
     def get_cam_param(self, idx):
-        image_name = self._load_image_name(self._raw_idx[idx])
-        # image_name = self._load_image_name(self._raw_idx[0])
-        cam_param = self.cam_param_dict[image_name]
-        m2c = np.array(cam_param['w2c']) @ np.array(cam_param['m2w'])
-        c2i = np.array(cam_param['c2i'])
-        return m2c.copy(), c2i.copy()
+        if self._use_cam:
+            image_name = self._load_image_name(self._raw_idx[idx])
+            cam_param = self.cam_param_dict[image_name]
+            m2c = np.array(cam_param['w2c']) @ np.array(cam_param['m2w'])
+            c2i = np.array(cam_param['c2i'])
+            return m2c.copy(), c2i.copy()
+        else:
+            m2c = torch.eye(4, 4)
+            c2i = torch.eye(3, 4)
+            return m2c, c2i
 
     def get_label(self, idx):
         label = self._get_raw_labels()[self._raw_idx[idx]]

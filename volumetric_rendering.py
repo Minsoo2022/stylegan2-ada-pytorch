@@ -52,7 +52,7 @@ def fancy_integration(rgb_sigma, z_vals, device, noise_std=0.5, last_back=False,
 
 
 # https://github.com/marcoamonteiro/pi-GAN/blob/master/generators/volumetric_rendering.py#L58
-def get_initial_rays_image(n, num_steps, device, resolution, ray_start, ray_end, perturb_points=False):
+def get_initial_rays_image(n, num_steps, device, resolution, ray_start, ray_end, perturb_points=True):
     """Returns sample points, z_vals, and ray directions in image space."""
     W, H = resolution
     # Create full screen NDC (-1 to +1) coords [x, y, 0, 1].

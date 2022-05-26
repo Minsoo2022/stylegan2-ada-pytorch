@@ -64,6 +64,7 @@ def setup_training_loop_kwargs(
     # Dataset.
     data       = None, # Training dataset (required): <path>
     cond       = None, # Train conditional model based on dataset labels: <bool>, default = False
+    cam        = None, # Use camera parameters to sample camera poses and train conditional model: <bool>, default = True
     subset     = None, # Train with only N images: <int>, default = all
     mirror     = None, # Augment dataset with x-flips: <bool>, default = False
 
@@ -124,11 +125,13 @@ def setup_training_loop_kwargs(
     args.random_seed = seed
 
     # -----------------------------------
-    # Dataset: data, cond, subset, mirror
+    # Dataset: data, cond, cam, subset, mirror
     # -----------------------------------
 
     assert data is not None
     assert isinstance(data, str)
+    if cam is None:
+        cam = True
     args.training_set_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data, use_labels=True, max_size=None, xflip=False)
     args.data_loader_kwargs = dnnlib.EasyDict(pin_memory=True, num_workers=3, prefetch_factor=2)
     try:
@@ -150,6 +153,13 @@ def setup_training_loop_kwargs(
         desc += '-cond'
     else:
         args.training_set_kwargs.use_labels = False
+
+    assert isinstance(cond, bool)
+    if cam:
+        args.training_set_kwargs.use_cam = True
+        desc += '-cam'
+    else:
+        args.training_set_kwargs.use_cam = False
 
     if subset is not None:
         assert isinstance(subset, int)
@@ -204,9 +214,12 @@ def setup_training_loop_kwargs(
     args.G_kwargs.synthesis_kwargs.channel_base = args.D_kwargs.channel_base = int(spec.fmaps * 32768)
     args.G_kwargs.synthesis_kwargs.channel_max = args.D_kwargs.channel_max = 512
     args.G_kwargs.mapping_kwargs.num_layers = spec.map
+    args.G_kwargs.mapping_kwargs.cam_condition = args.training_set_kwargs.use_cam
     args.G_kwargs.synthesis_kwargs.num_fp16_res = args.D_kwargs.num_fp16_res = 4 # enable mixed-precision training
     args.G_kwargs.synthesis_kwargs.conv_clamp = args.D_kwargs.conv_clamp = 256 # clamp activations to avoid float16 overflow
+    args.G_kwargs.synthesis_kwargs.cam_data_sample = args.training_set_kwargs.use_cam
     args.D_kwargs.epilogue_kwargs.mbstd_group_size = spec.mbstd
+    args.D_kwargs.mapping_kwargs.cam_condition = args.training_set_kwargs.use_cam
 
     args.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
     args.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.lrate, betas=[0,0.99], eps=1e-8)
@@ -435,6 +448,7 @@ class CommaSeparatedList(click.ParamType):
 # Dataset.
 @click.option('--data', help='Training data (directory or zip)', metavar='PATH', required=True)
 @click.option('--cond', help='Train conditional model based on dataset labels [default: false]', type=bool, metavar='BOOL')
+@click.option('--cam', help='Use camera parameters to sample camera poses and train conditional model  [default: true]', type=bool, metavar='BOOL')
 @click.option('--subset', help='Train with only N images [default: all]', type=int, metavar='INT')
 @click.option('--mirror', help='Enable dataset x-flips [default: false]', type=bool, metavar='BOOL')
 
@@ -534,6 +548,7 @@ def main(ctx, outdir, dry_run, **config_kwargs):
     print(f'Number of GPUs:     {args.num_gpus}')
     print(f'Number of images:   {args.training_set_kwargs.max_size}')
     print(f'Image resolution:   {args.training_set_kwargs.resolution}')
+    print(f'Use camera param:   {args.training_set_kwargs.use_cam}')
     print(f'Conditional model:  {args.training_set_kwargs.use_labels}')
     print(f'Dataset x-flips:    {args.training_set_kwargs.xflip}')
     print()
