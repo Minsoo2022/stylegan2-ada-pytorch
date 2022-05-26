@@ -182,6 +182,7 @@ class MappingNetwork(torch.nn.Module):
         w_dim,                      # Intermediate latent (W) dimensionality.
         num_ws,                     # Number of intermediate latents to output, None = do not broadcast.
         num_layers      = 8,        # Number of mapping layers.
+        cam_condition   = True,     # Training conditional model based on camera parameters
         embed_features  = None,     # Label embedding dimensionality, None = same as w_dim.
         layer_features  = None,     # Number of intermediate features in the mapping layers, None = same as w_dim.
         activation      = 'lrelu',  # Activation function: 'relu', 'lrelu', etc.
@@ -195,17 +196,21 @@ class MappingNetwork(torch.nn.Module):
         self.num_ws = num_ws
         self.num_layers = num_layers
         self.w_avg_beta = w_avg_beta
-        # TODO: cam_param condition
         if embed_features is None:
             embed_features = w_dim
-        if c_dim == 0:
+        self.cam_condition = cam_condition
+        if cam_condition:
+            self.cam_dim = 25
+        else:
+            self.cam_dim = 0
+        if c_dim == 0 and not cam_condition:
             embed_features = 0
         if layer_features is None:
             layer_features = w_dim
         features_list = [z_dim + embed_features] + [layer_features] * (num_layers - 1) + [w_dim]
 
-        if c_dim > 0:
-            self.embed = FullyConnectedLayer(c_dim, embed_features)
+        if c_dim > 0 or cam_condition:
+            self.embed = FullyConnectedLayer(c_dim + self.cam_dim, embed_features)
         for idx in range(num_layers):
             in_features = features_list[idx]
             out_features = features_list[idx + 1]
@@ -222,8 +227,11 @@ class MappingNetwork(torch.nn.Module):
             if self.z_dim > 0:
                 misc.assert_shape(z, [None, self.z_dim])
                 x = normalize_2nd_moment(z.to(torch.float32))
-            if self.c_dim > 0:
-                misc.assert_shape(c, [None, self.c_dim])
+            if self.c_dim > 0 or self.cam_condition:
+                if self.cam_condition:
+                    cam_c = torch.cat([m2c.reshape(-1, 16), c2i[:, :3, :3].reshape(-1, 9)], dim=1)
+                    c = torch.cat([c, cam_c], dim=1)
+                misc.assert_shape(c, [None, self.c_dim + self.cam_dim])
                 y = normalize_2nd_moment(self.embed(c.to(torch.float32)))
                 x = torch.cat([x, y], dim=1) if x is not None else y
 
@@ -274,14 +282,14 @@ class TriPlaneDecoder(torch.nn.Module):
         setattr(self, f'fc{1}', layer1)
 
     def forward(self, x):
-        batch_size, triplane_channels_div3, num_samples, feat_res, _ = x.shape
+        batch_size, triplane_channels_div3, num_steps, feat_res, _ = x.shape
         x = x.permute(0, 2, 3, 4, 1).reshape(-1, triplane_channels_div3)
         layer0 = getattr(self, f'fc{0}')
         layer1 = getattr(self, f'fc{1}')
         x = layer0(x)
         # x = self.activation(x)
         x = layer1(x)
-        x = x.reshape(batch_size, num_samples, feat_res * feat_res, self.out_dim)
+        x = x.reshape(batch_size, num_steps, feat_res * feat_res, self.out_dim)
         return x
 
 #----------------------------------------------------------------------------
@@ -466,6 +474,7 @@ class SynthesisNetwork(torch.nn.Module):
         triplane_res,
         feat_channels,
         feat_res,
+        cam_data_sample = True,     # Use camera parameters to sample camera poses
         channel_base    = 32768,    # Overall multiplier for the number of channels.
         channel_max     = 512,      # Maximum number of channels in any layer.
         num_fp16_res    = 0,        # Use FP16 for the N highest resolutions.
@@ -477,6 +486,7 @@ class SynthesisNetwork(torch.nn.Module):
         self.img_resolution = img_resolution
         self.triplane_res = triplane_res
         self.triplane_resolution_log2 = int(np.log2(triplane_res))
+        self.cam_data_sample = cam_data_sample
         # self.img_channels = img_channels
         self.img_channels = 3
         self.triplane_channels = triplane_channels
@@ -546,33 +556,33 @@ class SynthesisNetwork(torch.nn.Module):
         # TODO: cam_param으로 query points sampling
         # TODO: hierarchical sampling
         num_steps = 24
-        # fov = 12
-        # ray_start = 0.88
-        # ray_end = 1.12
-        # img_size = self.feat_res
-        # h_stddev = 0.3
-        # v_stddev = 1.55
-        # h_mean = 1.57
-        # v_mean = 1.57
-        # sample_dist = 'gaussian'
 
-        # points_cam, z_vals, rays_d_cam = get_initial_rays_trig(batch_size, num_steps, resolution=(img_size, img_size),
-        #                                                        device=ws.device, fov=fov, ray_start=ray_start,
-        #                                                        ray_end=ray_end)  # batch_size, pixels, num_steps, 1
-        # transformed_points, z_vals, transformed_ray_directions, transformed_ray_origins, pitch, yaw = transform_sampled_points(
-        #     points_cam, z_vals, rays_d_cam, h_stddev=h_stddev, v_stddev=v_stddev, h_mean=h_mean, v_mean=v_mean,
-        #     device=ws.device, mode=sample_dist)
-        #
-        # transformed_points = transformed_points.reshape(batch_size, img_size, img_size, num_steps, 3).permute(0,4,1,2,3)
-        # transformed_points = transformed_points * 5
-
-
-#-----------------------------------------
-        points, z_vals, rays_d_image = get_initial_rays_image(batch_size, num_steps, ws.device, (self.feat_res, self.feat_res), 1.4, 2.6)
-        i2m = get_i2m(c2i, m2c)
-        origin, direction, query_points = transform_points(i2m.float(), rays_d_image, points)
-        transformed_points = query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, num_steps)
-# -----------------------------------------
+        # -----------------------------------------
+        if self.cam_data_sample:
+            points, z_vals, rays_d_image = get_initial_rays_image(batch_size, num_steps, ws.device,
+                                                                  (self.feat_res, self.feat_res), 1.4, 2.6)
+            i2m = get_i2m(c2i, m2c)
+            origin, direction, query_points = transform_points(i2m.float(), rays_d_image, points)
+            transformed_points = query_points.permute(0, 3, 1, 2).reshape(batch_size, 3, self.feat_res, self.feat_res,
+                                                                          num_steps)
+        # -----------------------------------------
+        else:
+            fov = 12
+            ray_start = 0.88
+            ray_end = 1.12
+            h_stddev = 0.3
+            v_stddev = 1.55
+            h_mean = 1.57
+            v_mean = 1.57
+            sample_dist = 'gaussian'
+            points_cam, z_vals, rays_d_cam = get_initial_rays_trig(batch_size, num_steps, resolution=(self.feat_res, self.feat_res),
+                                                                   device=ws.device, fov=fov, ray_start=ray_start,
+                                                                   ray_end=ray_end)
+            transformed_points, z_vals, transformed_ray_directions, transformed_ray_origins, pitch, yaw = transform_sampled_points(
+                points_cam, z_vals, rays_d_cam, h_stddev=h_stddev, v_stddev=v_stddev, h_mean=h_mean, v_mean=v_mean,
+                device=ws.device, mode=sample_dist)
+            transformed_points = transformed_points.reshape(batch_size, self.feat_res, self.feat_res, num_steps, 3).permute(0,4,1,2,3)
+            transformed_points = transformed_points * 5
 
         feature_map = self.feature_sample(triplane, transformed_points)
         output = self.tri_plane_decoder(feature_map).permute(0, 2, 1, 3)
@@ -835,10 +845,10 @@ class Discriminator(torch.nn.Module):
         self.block_resolutions = [2 ** i for i in range(self.img_resolution_log2, 2, -1)]
         channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions + [4]}
         fp16_resolution = max(2 ** (self.img_resolution_log2 + 1 - num_fp16_res), 8)
-
+        self.cam_condition = mapping_kwargs.cam_condition
         if cmap_dim is None:
             cmap_dim = channels_dict[4]
-        if c_dim == 0:
+        if c_dim == 0 and not self.cam_condition:
             cmap_dim = 0
 
         common_kwargs = dict(img_channels=img_channels, architecture=architecture, conv_clamp=conv_clamp)
@@ -852,7 +862,8 @@ class Discriminator(torch.nn.Module):
                 first_layer_idx=cur_layer_idx, use_fp16=use_fp16, **block_kwargs, **common_kwargs)
             setattr(self, f'b{res}', block)
             cur_layer_idx += block.num_layers
-        if c_dim > 0:
+        if c_dim > 0 or self.cam_condition:
+            mapping_kwargs['num_layers'] = 4
             self.mapping = MappingNetwork(z_dim=0, c_dim=c_dim, w_dim=cmap_dim, num_ws=None, w_avg_beta=None, **mapping_kwargs)
         self.b4 = DiscriminatorEpilogue(channels_dict[4], cmap_dim=cmap_dim, resolution=4, **epilogue_kwargs, **common_kwargs)
 
@@ -863,8 +874,8 @@ class Discriminator(torch.nn.Module):
             x, img = block(x, img, **block_kwargs)
 
         cmap = None
-        if self.c_dim > 0:
-            cmap = self.mapping(None, c)
+        if self.c_dim > 0 or self.cam_condition:
+            cmap = self.mapping(None, c, m2c, c2i)
         x = self.b4(x, img, cmap)
         return x
 
