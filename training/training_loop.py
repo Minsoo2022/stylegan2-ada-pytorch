@@ -21,6 +21,8 @@ from torch_utils import training_stats
 from torch_utils.ops import conv2d_gradfix
 from torch_utils.ops import grid_sample_gradfix
 from torch_utils.ops import upfirdn2d
+from volumetric_rendering import cal_m2c
+
 
 import legacy
 from metrics import metric_main
@@ -34,8 +36,10 @@ Hz_geom = upfirdn2d.setup_filter(sym6)
 
 def setup_snapshot_image_grid(training_set, random_seed=0):
     rnd = np.random.RandomState(random_seed)
-    gw = np.clip(7680 // training_set.image_shape[2], 7, 32)
-    gh = np.clip(4320 // training_set.image_shape[1], 4, 32)
+    # gw = np.clip(7680 // training_set.image_shape[2], 7, 32)
+    # gh = np.clip(4320 // training_set.image_shape[1], 4, 32)
+    gw = 5
+    gh = 12
 
     # No labels => show random subset of training samples.
     if not training_set.has_labels:
@@ -66,8 +70,16 @@ def setup_snapshot_image_grid(training_set, random_seed=0):
             label_groups[label] = [indices[(i + gw) % len(indices)] for i in range(len(indices))]
 
     # Load data.
-    images, labels, m2c, c2i = zip(*[training_set[i] for i in grid_indices])
-    return (gw, gh), np.stack(images), np.stack(labels), np.stack(m2c), np.stack(c2i)
+    images, _, _, _ = zip(*[training_set[i] for i in grid_indices])
+    _, labels, m2c, c2i = zip(*[training_set[i] for i in range(gh)])
+    theta = [0.6, 0.3 , 0, -0.3, -0.6]
+    phi = [0, 0, 0, 0, 0]
+    m2c = cal_m2c(theta, phi)
+
+    return (gw, gh), torch.from_numpy(np.stack(images)), \
+           torch.from_numpy(np.vstack([np.stack(labels)] * gw)), \
+           torch.from_numpy(np.stack([np.stack(m2c)])).repeat(gh,1,1,1).permute(1,0,2,3).reshape(gw*gh,4,4)\
+        , torch.from_numpy(np.vstack([np.stack(c2i)] * gw))
 
 #----------------------------------------------------------------------------
 
@@ -120,6 +132,7 @@ def training_loop(
     image_snapshot_ticks    = 50,       # How often to save image snapshots? None = disable.
     network_snapshot_ticks  = 50,       # How often to save network snapshots? None = disable.
     resume_pkl              = None,     # Network pickle to resume training from.
+    resume_kimg             = 0,        # First kimg to report when resuming training.
     cudnn_benchmark         = True,     # Enable torch.backends.cudnn.benchmark?
     allow_tf32              = False,    # Enable torch.backends.cuda.matmul.allow_tf32 and torch.backends.cudnn.allow_tf32?
     abort_fn                = None,     # Callback function for determining whether to abort training. Must return consistent results across ranks.
@@ -230,11 +243,12 @@ def training_loop(
         grid_size, images, labels, m2cs, c2is = setup_snapshot_image_grid(training_set=training_set)
         # TODO
         # save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
-        grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
-        grid_c = torch.from_numpy(labels).to(device).split(batch_gpu)
-        grid_m2c = torch.from_numpy(m2cs).to(device).split(batch_gpu)
-        grid_c2i = torch.from_numpy(c2is).to(device).split(batch_gpu)
-        images = torch.cat([G_ema(z=z, c=c, m2c=m2c, c2i=c2i, noise_mode='const').cpu() for z, c, m2c, c2i in zip(grid_z, grid_c, grid_m2c, grid_c2i)]).numpy()
+        # grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
+        grid_z = torch.randn([grid_size[1], G.z_dim], device=device).repeat(grid_size[0], 1).split(batch_gpu)
+        grid_c = labels.to(device).split(batch_gpu)
+        grid_m2c = m2cs.to(device).split(batch_gpu)
+        grid_c2i = c2is.to(device).split(batch_gpu)
+        # images = torch.cat([G_ema(z=z, c=c, m2c=m2c, c2i=c2i, noise_mode='const').cpu() for z, c, m2c, c2i in zip(grid_z, grid_c, grid_m2c, grid_c2i)]).numpy()
         # TODO
         # save_image_grid(images[:,:training_set.num_channels], os.path.join(run_dir, 'fakes_init.png'), drange=[-1,1], grid_size=grid_size)
 
@@ -257,7 +271,7 @@ def training_loop(
     if rank == 0:
         print(f'Training for {total_kimg} kimg...')
         print()
-    cur_nimg = 0
+    cur_nimg = resume_kimg * 1000
     cur_tick = 0
     tick_start_nimg = cur_nimg
     tick_start_time = time.time()
@@ -373,10 +387,12 @@ def training_loop(
                 print('Aborting...')
 
         # Save image snapshot.
-        if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
+        # if (rank == 0) and (image_snapshot_ticks is not None) and (done or cur_tick % image_snapshot_ticks == 0):
+        if (rank == 0) :
             images = torch.cat([G_ema(z=z, c=c, m2c=m2c, c2i=c2i, noise_mode='const').cpu() for z, c, m2c, c2i in zip(grid_z, grid_c, grid_m2c, grid_c2i)]).numpy()
-            save_image_grid(images[:,:training_set.num_channels], os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1,1], grid_size=grid_size)
-
+            save_image_grid(images[:, :training_set.num_channels].reshape(grid_size[0], grid_size[1], -1).
+                            transpose(1, 0,2).reshape(images[:, :training_set.num_channels].shape),
+                            os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=grid_size)
         # Save network snapshot.
         snapshot_pkl = None
         snapshot_data = None

@@ -276,7 +276,8 @@ class TriPlaneDecoder(torch.nn.Module):
         self.out_dim = out_dim
         # self.activation = torch.nn.Softmax(dim=-1)
         # TODO: softmax
-        layer0 = FullyConnectedLayer(input_dim, c_dim, activation='lrelu', lr_multiplier=lr_multiplier)
+        # layer0 = FullyConnectedLayer(input_dim, c_dim, activation='lrelu', lr_multiplier=lr_multiplier)
+        layer0 = FullyConnectedLayer(input_dim, c_dim, activation='softplus', lr_multiplier=lr_multiplier)
         setattr(self, f'fc{0}', layer0)
         layer1 = FullyConnectedLayer(c_dim, out_dim, activation='linear', lr_multiplier=lr_multiplier)
         setattr(self, f'fc{1}', layer1)
@@ -478,6 +479,9 @@ class SynthesisNetwork(torch.nn.Module):
         channel_base    = 32768,    # Overall multiplier for the number of channels.
         channel_max     = 512,      # Maximum number of channels in any layer.
         num_fp16_res    = 0,        # Use FP16 for the N highest resolutions.
+        num_steps = 0,
+        point_scaling = False,
+        importance_sampling = False,
         **block_kwargs,             # Arguments for SynthesisBlock.
     ):
         assert img_resolution >= 4 and img_resolution & (img_resolution - 1) == 0
@@ -487,6 +491,9 @@ class SynthesisNetwork(torch.nn.Module):
         self.triplane_res = triplane_res
         self.triplane_resolution_log2 = int(np.log2(triplane_res))
         self.cam_data_sample = cam_data_sample
+        self.num_steps = num_steps
+        self.point_scaling = point_scaling
+        self.importance_sampling = importance_sampling
         # self.img_channels = img_channels
         self.img_channels = 3
         self.triplane_channels = triplane_channels
@@ -553,35 +560,32 @@ class SynthesisNetwork(torch.nn.Module):
             block = getattr(self, f'b{res}')
             x, triplane = block(x, triplane, cur_ws, **block_kwargs)
 
-        # TODO: cam_param으로 query points sampling
         # TODO: hierarchical sampling
-        num_steps = 24
 
-        # -----------------------------------------
         if self.cam_data_sample:
-            points, z_vals, rays_d_image = get_initial_rays_image(batch_size, num_steps, ws.device,
+            points, z_vals, rays_d_image = get_initial_rays_image(batch_size, self.num_steps, ws.device,
                                                                   (self.feat_res, self.feat_res), 1.4, 2.6)
             i2m = get_i2m(c2i, m2c)
             origin, direction, query_points = transform_points(i2m.float(), rays_d_image, points)
-            transformed_points = query_points.permute(0, 3, 1, 2).reshape(batch_size, 3, self.feat_res, self.feat_res,
-                                                                          num_steps)
-        # -----------------------------------------
+            transformed_points = query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, self.num_steps)
+            if self.point_scaling:
+                transformed_points = transformed_points * 2.5
         else:
             fov = 12
             ray_start = 0.88
             ray_end = 1.12
             h_stddev = 0.3
-            v_stddev = 1.55
+            v_stddev = 0.3
             h_mean = 1.57
             v_mean = 1.57
             sample_dist = 'gaussian'
-            points_cam, z_vals, rays_d_cam = get_initial_rays_trig(batch_size, num_steps, resolution=(self.feat_res, self.feat_res),
+            points_cam, z_vals, rays_d_cam = get_initial_rays_trig(batch_size, self.num_steps, resolution=(self.feat_res, self.feat_res),
                                                                    device=ws.device, fov=fov, ray_start=ray_start,
                                                                    ray_end=ray_end)
             transformed_points, z_vals, transformed_ray_directions, transformed_ray_origins, pitch, yaw = transform_sampled_points(
                 points_cam, z_vals, rays_d_cam, h_stddev=h_stddev, v_stddev=v_stddev, h_mean=h_mean, v_mean=v_mean,
                 device=ws.device, mode=sample_dist)
-            transformed_points = transformed_points.reshape(batch_size, self.feat_res, self.feat_res, num_steps, 3).permute(0,4,1,2,3)
+            transformed_points = transformed_points.reshape(batch_size, self.feat_res, self.feat_res, self.num_steps, 3).permute(0,4,1,2,3)
             transformed_points = transformed_points * 5
 
         feature_map = self.feature_sample(triplane, transformed_points)
@@ -595,7 +599,6 @@ class SynthesisNetwork(torch.nn.Module):
             sup_block = getattr(self, f'sup_b{res}')
             pixels, img = sup_block(pixels, img, cur_ws, **block_kwargs)
         upsampled_img = upfirdn2d.upsample2d(x=low_img, f=self.Hz_geom.to(ws.device), up=4)
-        # TODO: superres module
         return torch.cat([img, upsampled_img], dim=1)
 
     def feature_sample(self, triplane, query_points):
@@ -607,7 +610,7 @@ class SynthesisNetwork(torch.nn.Module):
         xy_feature_list = []
         xz_feature_list = []
         yz_feature_list = []
-        for z_idx in range(24):
+        for z_idx in range(self.num_steps):
             xy_feature_list.append(grid_sample_gradfix.grid_sample(xy_plane, query_points_xy[..., z_idx].permute(0, 2, 3, 1)))
             xz_feature_list.append(grid_sample_gradfix.grid_sample(xz_plane, query_points_xz[..., z_idx].permute(0, 2, 3, 1)))
             yz_feature_list.append(grid_sample_gradfix.grid_sample(yz_plane, query_points_yz[..., z_idx].permute(0, 2, 3, 1)))
@@ -643,6 +646,8 @@ class Generator(torch.nn.Module):
                                           triplane_channels=triplane_channels, triplane_res=triplane_res,
                                           feat_channels=feat_channels, feat_res=feat_res, **synthesis_kwargs)
         self.num_ws = self.synthesis.num_ws
+        print('Mapping network of Generator doesnt use camera parameter conditional model')
+        mapping_kwargs.cam_condition = False
         self.mapping = MappingNetwork(z_dim=z_dim, c_dim=c_dim, w_dim=w_dim, num_ws=self.num_ws, **mapping_kwargs)
 
     def forward(self, z, c, m2c, c2i, truncation_psi=1, truncation_cutoff=None, **synthesis_kwargs):
