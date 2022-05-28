@@ -890,10 +890,10 @@ class Discriminator(torch.nn.Module):
         self.block_resolutions = [2 ** i for i in range(self.img_resolution_log2, 2, -1)]
         channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions + [4]}
         fp16_resolution = max(2 ** (self.img_resolution_log2 + 1 - num_fp16_res), 8)
-
+        self.cam_condition = mapping_kwargs.cam_condition
         if cmap_dim is None:
             cmap_dim = channels_dict[4]
-        if c_dim == 0:
+        if c_dim == 0 and not self.cam_condition:
             cmap_dim = 0
 
         common_kwargs = dict(img_channels=img_channels, architecture=architecture, conv_clamp=conv_clamp)
@@ -907,7 +907,8 @@ class Discriminator(torch.nn.Module):
                 first_layer_idx=cur_layer_idx, use_fp16=use_fp16, **block_kwargs, **common_kwargs)
             setattr(self, f'b{res}', block)
             cur_layer_idx += block.num_layers
-        if c_dim > 0:
+        if c_dim > 0 or self.cam_condition:
+            mapping_kwargs['num_layers'] = 4
             self.mapping = MappingNetwork(z_dim=0, c_dim=c_dim, w_dim=cmap_dim, num_ws=None, w_avg_beta=None, **mapping_kwargs)
         self.b4 = DiscriminatorEpilogue(channels_dict[4], cmap_dim=cmap_dim, resolution=4, **epilogue_kwargs, **common_kwargs)
 
@@ -918,8 +919,8 @@ class Discriminator(torch.nn.Module):
             x, img = block(x, img, **block_kwargs)
 
         cmap = None
-        if self.c_dim > 0:
-            cmap = self.mapping(None, c)
+        if self.c_dim > 0 or self.cam_condition:
+            cmap = self.mapping(None, c, m2c, c2i)
         x = self.b4(x, img, cmap)
         return x
 
