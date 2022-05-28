@@ -196,8 +196,7 @@ class MappingNetwork(torch.nn.Module):
         self.num_ws = num_ws
         self.num_layers = num_layers
         self.w_avg_beta = w_avg_beta
-        cam_condition = False
-        print('Mapping network of Generator doesnt use camera parameter conditional model')
+
         # TODO: cam_param option
         if embed_features is None:
             embed_features = w_dim
@@ -687,6 +686,8 @@ class Generator(torch.nn.Module):
                                           triplane_channels=triplane_channels, triplane_res=triplane_res,
                                           feat_channels=feat_channels, feat_res=feat_res, **synthesis_kwargs)
         self.num_ws = self.synthesis.num_ws
+        print('Mapping network of Generator doesnt use camera parameter conditional model')
+        mapping_kwargs.cam_condition = False
         self.mapping = MappingNetwork(z_dim=z_dim, c_dim=c_dim, w_dim=w_dim, num_ws=self.num_ws, **mapping_kwargs)
 
     def forward(self, z, c, m2c, c2i, truncation_psi=1, truncation_cutoff=None, **synthesis_kwargs):
