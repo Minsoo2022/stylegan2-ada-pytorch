@@ -323,7 +323,7 @@ def training_loop(
                 sync = (round_idx == batch_size // (batch_gpu * num_gpus) - 1)
                 gain = phase.interval
                 loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, real_m2c=real_m2c,
-                                          real_c2i=real_c2i, gen_z=gen_z, gen_c=gen_c, gen_m2c=gen_m2c, gen_c2i=gen_c2i, sync=sync, gain=gain)
+                                          real_c2i=real_c2i, gen_z=gen_z, gen_c=gen_c, gen_m2c=gen_m2c, gen_c2i=gen_c2i, sync=sync, gain=gain, cur_nimg=cur_nimg)
 
             # Update weights.
             phase.module.requires_grad_(False)
