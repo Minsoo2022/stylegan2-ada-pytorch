@@ -196,6 +196,8 @@ class MappingNetwork(torch.nn.Module):
         self.num_ws = num_ws
         self.num_layers = num_layers
         self.w_avg_beta = w_avg_beta
+        cam_condition = False
+        print('Mapping network of Generator doesnt use camera parameter conditional model')
         # TODO: cam_param option
         if embed_features is None:
             embed_features = w_dim
@@ -573,8 +575,7 @@ class SynthesisNetwork(torch.nn.Module):
             origin, direction, query_points = transform_points(i2m.float(), rays_d_image, points)
             transformed_points = query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, self.num_steps)
             if self.point_scaling:
-                # transformed_points = transformed_points * 2.5
-                transformed_points = transformed_points * 3
+                transformed_points = transformed_points * 2.5
         else:
             fov = 12
             ray_start = 0.88
@@ -608,8 +609,7 @@ class SynthesisNetwork(torch.nn.Module):
                 fine_query_points = origin + direction * fine_z_vals
                 fine_query_points = fine_query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, self.num_steps)
                 if True:
-                    # fine_query_points = fine_query_points * 2.5
-                    fine_query_points = fine_query_points * 3
+                    fine_query_points = fine_query_points * 2.5
 
             # TODO: check ddp consistency
             fine_feature_map = self.feature_sample(triplane, fine_query_points)
