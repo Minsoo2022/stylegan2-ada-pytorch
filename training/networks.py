@@ -480,6 +480,9 @@ class SynthesisNetwork(torch.nn.Module):
         channel_base    = 32768,    # Overall multiplier for the number of channels.
         channel_max     = 512,      # Maximum number of channels in any layer.
         num_fp16_res    = 0,        # Use FP16 for the N highest resolutions.
+        num_steps = 0,
+        point_scaling = False,
+        importance_sampling = False,
         **block_kwargs,             # Arguments for SynthesisBlock.
     ):
         assert img_resolution >= 4 and img_resolution & (img_resolution - 1) == 0
@@ -489,6 +492,9 @@ class SynthesisNetwork(torch.nn.Module):
         self.triplane_res = triplane_res
         self.triplane_resolution_log2 = int(np.log2(triplane_res))
         self.cam_data_sample = cam_data_sample
+        self.num_steps = num_steps
+        self.point_scaling = point_scaling
+        self.importance_sampling = importance_sampling
         # self.img_channels = img_channels
         self.img_channels = 3
         self.triplane_channels = triplane_channels
@@ -557,47 +563,53 @@ class SynthesisNetwork(torch.nn.Module):
 
         # TODO: cam_param으로 query points sampling
         # TODO: hierarchical sampling
-        num_steps = 24
-        importance_sampling = True
+
+        # importance_sampling = False
 
         if self.cam_data_sample:
-            points, z_vals, rays_d_image = get_initial_rays_image(batch_size, num_steps, ws.device,
+            points, z_vals, rays_d_image = get_initial_rays_image(batch_size, self.num_steps, ws.device,
                                                                   (self.feat_res, self.feat_res), 1.4, 2.6)
             i2m = get_i2m(c2i, m2c)
             origin, direction, query_points = transform_points(i2m.float(), rays_d_image, points)
-            transformed_points = query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, num_steps)
+            transformed_points = query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, self.num_steps)
+            if self.point_scaling:
+                # transformed_points = transformed_points * 2.5
+                transformed_points = transformed_points * 3
         else:
             fov = 12
             ray_start = 0.88
             ray_end = 1.12
             h_stddev = 0.3
-            v_stddev = 1.55
+            v_stddev = 0.3
             h_mean = 1.57
             v_mean = 1.57
             sample_dist = 'gaussian'
-            points_cam, z_vals, rays_d_cam = get_initial_rays_trig(batch_size, num_steps, resolution=(self.feat_res, self.feat_res),
+            points_cam, z_vals, rays_d_cam = get_initial_rays_trig(batch_size, self.num_steps, resolution=(self.feat_res, self.feat_res),
                                                                    device=ws.device, fov=fov, ray_start=ray_start,
                                                                    ray_end=ray_end)
             transformed_points, z_vals, transformed_ray_directions, transformed_ray_origins, pitch, yaw = transform_sampled_points(
                 points_cam, z_vals, rays_d_cam, h_stddev=h_stddev, v_stddev=v_stddev, h_mean=h_mean, v_mean=v_mean,
                 device=ws.device, mode=sample_dist)
-            transformed_points = transformed_points.reshape(batch_size, self.feat_res, self.feat_res, num_steps, 3).permute(0,4,1,2,3)
+            transformed_points = transformed_points.reshape(batch_size, self.feat_res, self.feat_res, self.num_steps, 3).permute(0,4,1,2,3)
             transformed_points = transformed_points * 5
 
         feature_map = self.feature_sample(triplane, transformed_points)
         # output = self.tri_plane_decoder(feature_map).permute(0, 2, 1, 3)
-        if importance_sampling:
+        if self.importance_sampling:
             with torch.no_grad():
                 output = self.tri_plane_decoder(feature_map).permute(0, 2, 1, 3)
                 _, _, weights = fancy_integration(output, z_vals, ws.device)
-                weights = weights.reshape(batch_size * self.feat_res * self.feat_res, num_steps) + 1e-5
-                z_vals = z_vals.reshape(batch_size * self.feat_res * self.feat_res, num_steps)
+                weights = weights.reshape(batch_size * self.feat_res * self.feat_res, self.num_steps) + 1e-5
+                z_vals = z_vals.reshape(batch_size * self.feat_res * self.feat_res, self.num_steps)
                 z_vals_mid = 0.5 * (z_vals[:, :-1] + z_vals[:, 1:])
-                z_vals = z_vals.reshape(batch_size, self.feat_res * self.feat_res, num_steps, 1)
-                fine_z_vals = sample_pdf(z_vals_mid, weights[:, 1:-1], num_steps, det=False).detach()
-                fine_z_vals = fine_z_vals.reshape(batch_size, self.feat_res * self.feat_res, num_steps, 1)
+                z_vals = z_vals.reshape(batch_size, self.feat_res * self.feat_res, self.num_steps, 1)
+                fine_z_vals = sample_pdf(z_vals_mid, weights[:, 1:-1], self.num_steps, det=False).detach()
+                fine_z_vals = fine_z_vals.reshape(batch_size, self.feat_res * self.feat_res, self.num_steps, 1)
                 fine_query_points = origin + direction * fine_z_vals
-                fine_query_points = fine_query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, num_steps)
+                fine_query_points = fine_query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, self.num_steps)
+                if True:
+                    # fine_query_points = fine_query_points * 2.5
+                    fine_query_points = fine_query_points * 3
 
             # TODO: check ddp consistency
             fine_feature_map = self.feature_sample(triplane, fine_query_points)
@@ -605,10 +617,9 @@ class SynthesisNetwork(torch.nn.Module):
             #
             # all_output = torch.cat([fine_output, output], dim = -2)
             # all_z_vals = torch.cat([fine_z_vals, z_vals], dim = -2)
-            self.tri_plane_decoder.train()
             fine_coarse_output = self.tri_plane_decoder(torch.cat([fine_feature_map, feature_map], dim=2)).permute(0, 2, 1, 3)
-            fine_output = fine_coarse_output[:, :, :num_steps]
-            output = fine_coarse_output[:, :, num_steps:]
+            fine_output = fine_coarse_output[:, :, :self.num_steps]
+            output = fine_coarse_output[:, :, self.num_steps:]
             all_output = torch.cat([fine_output, output], dim=-2)
             all_z_vals = torch.cat([fine_z_vals, z_vals], dim=-2)
             _, indices = torch.sort(all_z_vals, dim=-2)
@@ -640,7 +651,7 @@ class SynthesisNetwork(torch.nn.Module):
         xy_feature_list = []
         xz_feature_list = []
         yz_feature_list = []
-        for z_idx in range(24):
+        for z_idx in range(self.num_steps):
             xy_feature_list.append(grid_sample_gradfix.grid_sample(xy_plane, query_points_xy[..., z_idx].permute(0, 2, 3, 1)))
             xz_feature_list.append(grid_sample_gradfix.grid_sample(xz_plane, query_points_xz[..., z_idx].permute(0, 2, 3, 1)))
             yz_feature_list.append(grid_sample_gradfix.grid_sample(yz_plane, query_points_yz[..., z_idx].permute(0, 2, 3, 1)))

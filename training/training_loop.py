@@ -39,7 +39,7 @@ def setup_snapshot_image_grid(training_set, random_seed=0):
     # gw = np.clip(7680 // training_set.image_shape[2], 7, 32)
     # gh = np.clip(4320 // training_set.image_shape[1], 4, 32)
     gw = 5
-    gh = 6
+    gh = 12
 
     # No labels => show random subset of training samples.
     if not training_set.has_labels:
@@ -132,6 +132,7 @@ def training_loop(
     image_snapshot_ticks    = 50,       # How often to save image snapshots? None = disable.
     network_snapshot_ticks  = 50,       # How often to save network snapshots? None = disable.
     resume_pkl              = None,     # Network pickle to resume training from.
+    resume_kimg             = 0,        # First kimg to report when resuming training.
     cudnn_benchmark         = True,     # Enable torch.backends.cudnn.benchmark?
     allow_tf32              = False,    # Enable torch.backends.cuda.matmul.allow_tf32 and torch.backends.cudnn.allow_tf32?
     abort_fn                = None,     # Callback function for determining whether to abort training. Must return consistent results across ranks.
@@ -270,7 +271,7 @@ def training_loop(
     if rank == 0:
         print(f'Training for {total_kimg} kimg...')
         print()
-    cur_nimg = 0
+    cur_nimg = resume_kimg * 1000
     cur_tick = 0
     tick_start_nimg = cur_nimg
     tick_start_time = time.time()
@@ -322,7 +323,7 @@ def training_loop(
                 sync = (round_idx == batch_size // (batch_gpu * num_gpus) - 1)
                 gain = phase.interval
                 loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, real_m2c=real_m2c,
-                                          real_c2i=real_c2i, gen_z=gen_z, gen_c=gen_c, gen_m2c=gen_m2c, gen_c2i=gen_c2i, sync=sync, gain=gain)
+                                          real_c2i=real_c2i, gen_z=gen_z, gen_c=gen_c, gen_m2c=gen_m2c, gen_c2i=gen_c2i, sync=sync, gain=gain, cur_nimg=cur_nimg)
 
             # Update weights.
             phase.module.requires_grad_(False)

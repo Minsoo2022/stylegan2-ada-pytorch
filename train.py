@@ -193,8 +193,12 @@ def setup_training_loop_kwargs(
         'paper512':  dict(ref_gpus=8,  kimg=25000,  mb=64, mbstd=8,  fmaps=1,   lrate=0.0025,                gamma=0.5,  ema=20,  ramp=None, map=8),
         'paper1024': dict(ref_gpus=8,  kimg=25000,  mb=32, mbstd=4,  fmaps=1,   lrate=0.002,                 gamma=2,    ema=10,  ramp=None, map=8),
         'cifar':     dict(ref_gpus=2,  kimg=100000, mb=64, mbstd=32, fmaps=1,   lrate=0.0025,                gamma=0.01, ema=500, ramp=0.05, map=2),
-        '128_gpu1':  dict(ref_gpus=1,  kimg=25000,  mb=32, mbstd=8,  fmaps=1,   Glrate=0.0025, Dlrate=0.002, gamma=1,    ema=20,  ramp=None, map=8),
-        'debug':     dict(ref_gpus=1,  kimg=25000,  mb=4,  mbstd=8,  fmaps=1,   Glrate=0.0025, Dlrate=0.002, gamma=1,    ema=20,  ramp=None, map=8),
+        '128_gpu1':  dict(ref_gpus=1,  kimg=25000,  mb=32, mbstd=8,  fmaps=1,   Glrate=0.0025, Dlrate=0.002, gamma=1,    ema=20,  ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=24),
+        '128_gpu4':  dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20, ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=24),
+        '128_gpu4_noim': dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20, ramp=None, map=8, importance_sampling=False, point_scaling=True, num_steps=48),
+        '128_gpu2_noim': dict(ref_gpus=2, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1,
+                              ema=20, ramp=None, map=8, importance_sampling=False, point_scaling=True, num_steps=48),
+        'debug':     dict(ref_gpus=1,  kimg=25000,  mb=4, mbstd=8,  fmaps=1,   Glrate=0.0025, Dlrate=0.002, gamma=1,    ema=20,  ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=24),
     }
 
     assert cfg in cfg_specs
@@ -229,6 +233,10 @@ def setup_training_loop_kwargs(
     args.G_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.Glrate, betas=[0,0.99], eps=1e-8)
     args.D_opt_kwargs = dnnlib.EasyDict(class_name='torch.optim.Adam', lr=spec.Dlrate, betas=[0,0.99], eps=1e-8)
     args.loss_kwargs = dnnlib.EasyDict(class_name='training.loss.StyleGAN2Loss', r1_gamma=spec.gamma)
+
+    args.G_kwargs.synthesis_kwargs.importance_sampling = spec.importance_sampling
+    args.G_kwargs.synthesis_kwargs.point_scaling = spec.point_scaling
+    args.G_kwargs.synthesis_kwargs.num_steps = spec.num_steps
 
     args.total_kimg = spec.kimg
     args.batch_size = spec.mb
@@ -458,7 +466,7 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--mirror', help='Enable dataset x-flips [default: false]', type=bool, metavar='BOOL')
 
 # Base config.
-@click.option('--cfg', help='Base config [default: auto]', type=click.Choice(['auto', 'stylegan2', 'paper256', 'paper512', 'paper1024', 'cifar', 'debug', '128_gpu1']))
+@click.option('--cfg', help='Base config [default: auto]', type=click.Choice(['auto', 'stylegan2', 'paper256', 'paper512', 'paper1024', 'cifar', 'debug', '128_gpu1', '128_gpu4', '128_gpu4_noim', '128_gpu2_noim']))
 @click.option('--gamma', help='Override R1 gamma', type=float)
 @click.option('--kimg', help='Override training duration', type=int, metavar='INT')
 @click.option('--batch', help='Override batch size', type=int, metavar='INT')
@@ -556,6 +564,9 @@ def main(ctx, outdir, dry_run, **config_kwargs):
     print(f'Use camera param:   {args.training_set_kwargs.use_cam}')
     print(f'Conditional model:  {args.training_set_kwargs.use_labels}')
     print(f'Dataset x-flips:    {args.training_set_kwargs.xflip}')
+    print(f'Num_steps:    {args.G_kwargs.synthesis_kwargs.num_steps}')
+    print(f'Point scailing:    {args.G_kwargs.synthesis_kwargs.point_scaling}')
+    print(f'Importance sampling:    {args.G_kwargs.synthesis_kwargs.importance_sampling}')
     print()
 
     # Dry run?
