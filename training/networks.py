@@ -638,7 +638,10 @@ class SynthesisNetwork(torch.nn.Module):
         for res, cur_ws in zip(self.sup_block_resolutions, sup_block_ws):
             sup_block = getattr(self, f'sup_b{res}')
             pixels, img = sup_block(pixels, img, cur_ws, **block_kwargs)
-        upsampled_img = upfirdn2d.upsample2d(x=low_img, f=self.Hz_geom.to(ws.device), up=4)
+        # upsampled_img = upfirdn2d.upsample2d(x=low_img, f=self.Hz_geom.to(ws.device), up=4)
+        upsampled_img = F.interpolate(low_img, scale_factor=4, mode='bilinear', align_corners=True)
+
+        # F.interpolate(low_img, scale_factor=4, mode='bilinear')
         return torch.cat([img, upsampled_img], dim=1)
 
     def feature_sample(self, triplane, query_points):

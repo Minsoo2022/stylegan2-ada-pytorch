@@ -196,7 +196,7 @@ def setup_training_loop_kwargs(
         '128_gpu1':  dict(ref_gpus=1,  kimg=25000,  mb=32, mbstd=8,  fmaps=1,   Glrate=0.0025, Dlrate=0.002, gamma=1,    ema=20,  ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=24),
         '128_gpu2': dict(ref_gpus=2, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20,
                          ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=48),
-        '128_gpu4':  dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20, ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=24),
+        '128_gpu4':  dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20, ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=48),
         '128_gpu4_2': dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20,
                          ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=48),
         '128_gpu4_noim': dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20, ramp=None, map=8, importance_sampling=False, point_scaling=True, num_steps=48),
