@@ -310,9 +310,16 @@ def training_loop(
             all_gen_m2c = [phase_gen_cam.split(batch_gpu) for phase_gen_cam in all_gen_m2c.split(batch_size)]
             all_gen_c2i = torch.from_numpy(np.stack(all_gen_c2i)).pin_memory().to(device)
             all_gen_c2i = [phase_gen_c2i.split(batch_gpu) for phase_gen_c2i in all_gen_c2i.split(batch_size)]
+            all_gen_cam_2 = [training_set.get_cam_param(np.random.randint(len(training_set))) for _ in range(len(phases) * batch_size)]
+            all_gen_m2c_2 = [m2c for m2c, c2i in all_gen_cam_2]
+            all_gen_c2i_2 = [c2i for m2c, c2i in all_gen_cam_2]
+            all_gen_m2c_2 = torch.from_numpy(np.stack(all_gen_m2c_2)).pin_memory().to(device)
+            all_gen_m2c_2 = [phase_gen_cam.split(batch_gpu) for phase_gen_cam in all_gen_m2c_2.split(batch_size)]
+            all_gen_c2i_2 = torch.from_numpy(np.stack(all_gen_c2i_2)).pin_memory().to(device)
+            all_gen_c2i_2 = [phase_gen_c2i.split(batch_gpu) for phase_gen_c2i in all_gen_c2i_2.split(batch_size)]
 
         # Execute training phases.
-        for phase, phase_gen_z, phase_gen_c, phase_gen_m2c, phase_gen_c2i in zip(phases, all_gen_z, all_gen_c, all_gen_m2c, all_gen_c2i):
+        for phase, phase_gen_z, phase_gen_c, phase_gen_m2c, phase_gen_c2i, phase_gen_m2c_2, phase_gen_c2i_2 in zip(phases, all_gen_z, all_gen_c, all_gen_m2c, all_gen_c2i, all_gen_m2c_2, all_gen_c2i_2):
             if batch_idx % phase.interval != 0:
                 continue
 
@@ -323,11 +330,13 @@ def training_loop(
             phase.module.requires_grad_(True)
 
             # Accumulate gradients over multiple rounds.
-            for round_idx, (real_img, real_c, real_m2c, real_c2i, gen_z, gen_c, gen_m2c, gen_c2i) in enumerate(zip(phase_real_img, phase_real_c, phase_real_m2c, phase_real_c2i, phase_gen_z, phase_gen_c, phase_gen_m2c, phase_gen_c2i)):
+            for round_idx, (real_img, real_c, real_m2c, real_c2i, gen_z, gen_c, gen_m2c, gen_c2i, gen_m2c_2, gen_c2i_2) in \
+                    enumerate(zip(phase_real_img, phase_real_c, phase_real_m2c, phase_real_c2i, phase_gen_z, phase_gen_c, phase_gen_m2c, phase_gen_c2i, phase_gen_m2c_2, phase_gen_c2i_2)):
                 sync = (round_idx == batch_size // (batch_gpu * num_gpus) - 1)
                 gain = phase.interval
                 loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, real_m2c=real_m2c,
-                                          real_c2i=real_c2i, gen_z=gen_z, gen_c=gen_c, gen_m2c=gen_m2c, gen_c2i=gen_c2i, sync=sync, gain=gain, cur_nimg=cur_nimg)
+                                          real_c2i=real_c2i, gen_z=gen_z, gen_c=gen_c, gen_m2c=gen_m2c, gen_c2i=gen_c2i,
+                                          gen_m2c_2=gen_m2c_2, gen_c2i_2=gen_c2i_2, sync=sync, gain=gain, cur_nimg=cur_nimg)
 
             # Update weights.
             phase.module.requires_grad_(False)

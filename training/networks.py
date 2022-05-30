@@ -200,6 +200,9 @@ class MappingNetwork(torch.nn.Module):
         # TODO: cam_param option
         if embed_features is None:
             embed_features = w_dim
+        random_swap = True
+        if random_swap:
+            self.random_swap = random_swap
         self.cam_condition = cam_condition
         if cam_condition:
             self.cam_dim = 25
@@ -222,7 +225,7 @@ class MappingNetwork(torch.nn.Module):
         if num_ws is not None and w_avg_beta is not None:
             self.register_buffer('w_avg', torch.zeros([w_dim]))
 
-    def forward(self, z, c, m2c, c2i, truncation_psi=1, truncation_cutoff=None, skip_w_avg_update=False):
+    def forward(self, z, c, m2c, c2i, m2c_2=None, c2i_2=None, truncation_psi=1, truncation_cutoff=None, skip_w_avg_update=False):
         # Embed, normalize, and concat inputs.
         x = None
         with torch.autograd.profiler.record_function('input'):
@@ -231,6 +234,12 @@ class MappingNetwork(torch.nn.Module):
                 x = normalize_2nd_moment(z.to(torch.float32))
             if self.c_dim > 0 or self.cam_condition:
                 if self.cam_condition:
+                    if self.random_swap and m2c_2 is not None and c2i_2 is not None:
+                        rand_mask = torch.rand(z.shape[0], device=z.device) > 0.5
+                        m2c = m2c.clone()
+                        c2i = c2i.clone()
+                        m2c[rand_mask] = m2c_2[rand_mask]
+                        c2i[rand_mask] = c2i_2[rand_mask]
                     cam_c = torch.cat([m2c.reshape(-1, 16), c2i[:, :3, :3].reshape(-1, 9)], dim=1)
                     c = torch.cat([c, cam_c], dim=1)
                 misc.assert_shape(c, [None, self.c_dim + self.cam_dim])
@@ -270,7 +279,7 @@ class TriPlaneDecoder(torch.nn.Module):
         input_dim=32,
         c_dim=64,                      # Conditioning label (C) dimensionality, 0 = no label.
         out_dim=33,
-        lr_multiplier=0.1,     # Learning rate multiplier for the tri-plane decoder.
+        lr_multiplier=1,     # Learning rate multiplier for the tri-plane decoder.
     ):
         super().__init__()
         self.input_dim = input_dim
@@ -689,8 +698,8 @@ class Generator(torch.nn.Module):
                                           triplane_channels=triplane_channels, triplane_res=triplane_res,
                                           feat_channels=feat_channels, feat_res=feat_res, **synthesis_kwargs)
         self.num_ws = self.synthesis.num_ws
-        print('Mapping network of Generator doesnt use camera parameter conditional model')
-        mapping_kwargs.cam_condition = False
+        # print('Mapping network of Generator doesnt use camera parameter conditional model')
+        # mapping_kwargs.cam_condition = False
         self.mapping = MappingNetwork(z_dim=z_dim, c_dim=c_dim, w_dim=w_dim, num_ws=self.num_ws, **mapping_kwargs)
 
     def forward(self, z, c, m2c, c2i, truncation_psi=1, truncation_cutoff=None, **synthesis_kwargs):
