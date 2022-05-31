@@ -44,7 +44,7 @@ class StyleGAN2Loss(Loss):
 
     def run_G(self, z, c, m2c, c2i, m2c_2, c2i_2, sync):
         with misc.ddp_sync(self.G_mapping, sync):
-            ws = self.G_mapping(z, c, m2c, c2i, m2c_2, c2i_2)
+            ws = self.G_mapping(z, c, m2c, c2i, m2c_2, c2i_2, swap_prob=0.5)
             if self.style_mixing_prob > 0:
                 with torch.autograd.profiler.record_function('style_mixing'):
                     cutoff = torch.empty([], dtype=torch.int64, device=ws.device).random_(1, ws.shape[1])
@@ -84,7 +84,7 @@ class StyleGAN2Loss(Loss):
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
                 loss_Gmain = torch.nn.functional.softplus(-gen_logits) # -log(sigmoid(gen_logits))
                 training_stats.report('Loss/G/loss', loss_Gmain)
-                if (cur_nimg / self.batch_size) % 800 == 0 and rank == 0:
+                if (cur_nimg / self.batch_size) % 400 == 0 and rank == 0:
                     img_name = int(cur_nimg//100)
                     save_image(gen_img[:,:3].clamp(-1, 1) / 2 + 0.5, os.path.join(run_dir, f'G_fake_{img_name}.png'))
             with torch.autograd.profiler.record_function('Gmain_backward'):

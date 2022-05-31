@@ -223,8 +223,10 @@ class MappingNetwork(torch.nn.Module):
         if num_ws is not None and w_avg_beta is not None:
             self.register_buffer('w_avg', torch.zeros([w_dim]))
 
-    def forward(self, z, c, m2c, c2i, m2c_2=None, c2i_2=None, truncation_psi=1, truncation_cutoff=None, skip_w_avg_update=False):
+    def forward(self, z, c, m2c, c2i, m2c_2=None, c2i_2=None, truncation_psi=1, truncation_cutoff=None, skip_w_avg_update=False, swap_prob=1):
         # Embed, normalize, and concat inputs.
+        # if swap_prob < 1:
+        #     assert m2c_2 is not None and c2i_2 is not None
         x = None
         with torch.autograd.profiler.record_function('input'):
             if self.z_dim > 0:
@@ -233,7 +235,7 @@ class MappingNetwork(torch.nn.Module):
             if self.c_dim > 0 or self.cam_condition:
                 if self.cam_condition:
                     if self.random_swap and m2c_2 is not None and c2i_2 is not None:
-                        rand_mask = torch.rand(z.shape[0], device=z.device) > 0.5
+                        rand_mask = torch.rand(z.shape[0], device=z.device) > swap_prob
                         m2c = m2c.clone()
                         c2i = c2i.clone()
                         m2c[rand_mask] = m2c_2[rand_mask]
@@ -277,7 +279,7 @@ class TriPlaneDecoder(torch.nn.Module):
         input_dim=32,
         c_dim=64,                      # Conditioning label (C) dimensionality, 0 = no label.
         out_dim=33,
-        lr_multiplier=0.1,     # Learning rate multiplier for the tri-plane decoder.
+        lr_multiplier=0.01,     # Learning rate multiplier for the tri-plane decoder.
     ):
         super().__init__()
         self.input_dim = input_dim
@@ -686,8 +688,11 @@ class Generator(torch.nn.Module):
         self.num_ws = self.synthesis.num_ws
         self.mapping = MappingNetwork(z_dim=z_dim, c_dim=c_dim, w_dim=w_dim, num_ws=self.num_ws, **mapping_kwargs)
 
-    def forward(self, z, c, m2c, c2i, truncation_psi=1, truncation_cutoff=None, **synthesis_kwargs):
-        ws = self.mapping(z, c, m2c, c2i, truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff)
+    def forward(self, z, c, m2c, c2i, m2c_2=None, c2i_2=None, truncation_psi=1, truncation_cutoff=None, swap_prob=0, **synthesis_kwargs):
+        if m2c_2 is None and c2i_2 is None:
+            m2c_2 = m2c.clone()
+            c2i_2 = c2i.clone()
+        ws = self.mapping(z, c, m2c, c2i, m2c_2, c2i_2, truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff, swap_prob=swap_prob)
         img = self.synthesis(ws, m2c, c2i, **synthesis_kwargs)
         return img
 
