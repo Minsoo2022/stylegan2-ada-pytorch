@@ -193,10 +193,13 @@ def setup_training_loop_kwargs(
         'paper512':  dict(ref_gpus=8,  kimg=25000,  mb=64, mbstd=8,  fmaps=1,   lrate=0.0025,                gamma=0.5,  ema=20,  ramp=None, map=8),
         'paper1024': dict(ref_gpus=8,  kimg=25000,  mb=32, mbstd=4,  fmaps=1,   lrate=0.002,                 gamma=2,    ema=10,  ramp=None, map=8),
         'cifar':     dict(ref_gpus=2,  kimg=100000, mb=64, mbstd=32, fmaps=1,   lrate=0.0025,                gamma=0.01, ema=500, ramp=0.05, map=2),
-        '128_gpu1':  dict(ref_gpus=1,  kimg=25000,  mb=32, mbstd=8,  fmaps=1,   Glrate=0.0025, Dlrate=0.002, gamma=1,    ema=20,  ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=24),
+        '128_gpu1':  dict(ref_gpus=1,  kimg=25000,  mb=32, mbstd=8,  fmaps=1,   Glrate=0.0025, Dlrate=0.002, gamma=1,    ema=20,  ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=48),
         '128_gpu2': dict(ref_gpus=2, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20,
                          ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=48),
         '128_gpu4':  dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20, ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=48),
+        '128_gpu4_noscale': dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20,
+                         ramp=None, map=8, importance_sampling=True, point_scaling=False, num_steps=48),
+
         '128_gpu4_2': dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20,
                          ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=48),
         '128_gpu4_noim': dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20, ramp=None, map=8, importance_sampling=False, point_scaling=True, num_steps=48),
@@ -471,7 +474,8 @@ class CommaSeparatedList(click.ParamType):
 
 # Base config.
 @click.option('--cfg', help='Base config [default: auto]', type=click.Choice(['auto', 'stylegan2', 'paper256', 'paper512', 'paper1024', 'cifar', 'debug',
-                                                                              '128_gpu1', '128_gpu2', '128_gpu4', '128_gpu4_2','128_gpu4_noim', '128_gpu2_noim']))
+                                                                              '128_gpu1', '128_gpu2', '128_gpu4', '128_gpu4_noscale',
+                                                                              '128_gpu4_2','128_gpu4_noim', '128_gpu2_noim']))
 @click.option('--gamma', help='Override R1 gamma', type=float)
 @click.option('--kimg', help='Override training duration', type=int, metavar='INT')
 @click.option('--batch', help='Override batch size', type=int, metavar='INT')

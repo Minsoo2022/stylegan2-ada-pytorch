@@ -19,6 +19,7 @@ from torch_utils.ops import grid_sample_gradfix
 
 from volumetric_rendering import fancy_integration, get_initial_rays_image, get_i2m, transform_points, sample_pdf, get_initial_rays_trig, transform_sampled_points
 
+from torchvision.utils import save_image
 #----------------------------------------------------------------------------
 
 @misc.profiled_function
@@ -279,7 +280,7 @@ class TriPlaneDecoder(torch.nn.Module):
         input_dim=32,
         c_dim=64,                      # Conditioning label (C) dimensionality, 0 = no label.
         out_dim=33,
-        lr_multiplier=1,     # Learning rate multiplier for the tri-plane decoder.
+        lr_multiplier=0.1,     # Learning rate multiplier for the tri-plane decoder.
     ):
         super().__init__()
         self.input_dim = input_dim
@@ -517,11 +518,6 @@ class SynthesisNetwork(torch.nn.Module):
         self.sup_block_resolutions = [2 ** i for i in range(int(np.log2(feat_res)) + 1, int(np.log2(img_resolution)) + 1)]
         channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions}
         fp16_resolution = max(2 ** (self.triplane_resolution_log2 + 1 - num_fp16_res), 8)
-        sym6 = [0.015404109327027373, 0.0034907120842174702, -0.11799011114819057, -0.048311742585633,
-                0.4910559419267466,
-                0.787641141030194, 0.3379294217276218, -0.07263752278646252, -0.021060292512300564, 0.04472490177066578,
-                0.0017677118642428036, -0.007800708325034148]
-        self.register_buffer('Hz_geom', upfirdn2d.setup_filter(sym6))
 
         self.num_ws = 0
         for res in self.block_resolutions:
@@ -539,7 +535,8 @@ class SynthesisNetwork(torch.nn.Module):
         out_channels = feat_res
         for i, res in enumerate(self.sup_block_resolutions):
             in_channels = out_channels
-            out_channels = 128 if i == 0 else 64
+            # out_channels = 128 if i == 0 else 64
+            out_channels = 256 if i == 0 else 128
             is_last = (res == self.img_resolution)
             block = SynthesisBlock(in_channels, out_channels, w_dim=w_dim, resolution=res,
                 triplane_channels=img_channels, is_last=is_last, use_fp16=False, use_noise=False, **block_kwargs)
@@ -584,7 +581,7 @@ class SynthesisNetwork(torch.nn.Module):
                 origin, direction, query_points = transform_points(i2m.float(), rays_d_image, points)
                 transformed_points = query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, self.num_steps)
                 if self.point_scaling:
-                    transformed_points = transformed_points * 2.5
+                    transformed_points = transformed_points * 2
         else:
             fov = 12
             ray_start = 0.88
@@ -605,6 +602,7 @@ class SynthesisNetwork(torch.nn.Module):
 
         feature_map = self.feature_sample(triplane, transformed_points)
         output = self.tri_plane_decoder(feature_map).permute(0, 2, 1, 3)
+        # import pdb; pdb.set_trace()
         if self.importance_sampling:
             with torch.no_grad():
                 _, _, weights = fancy_integration(output, z_vals, ws.device)
@@ -617,7 +615,7 @@ class SynthesisNetwork(torch.nn.Module):
                 fine_query_points = origin + direction * fine_z_vals
                 fine_query_points = fine_query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, self.num_steps)
                 if self.point_scaling:
-                    fine_query_points = fine_query_points * 2.5
+                    fine_query_points = fine_query_points * 2
 
             # TODO: check ddp consistency
             fine_feature_map = self.feature_sample(triplane, fine_query_points)
@@ -625,17 +623,12 @@ class SynthesisNetwork(torch.nn.Module):
             #
             all_output = torch.cat([fine_output, output], dim = -2)
             all_z_vals = torch.cat([fine_z_vals, z_vals], dim = -2)
-            # fine_coarse_output = self.tri_plane_decoder(torch.cat([fine_feature_map, feature_map], dim=2)).permute(0, 2, 1, 3)
-            # fine_output = fine_coarse_output[:, :, :self.num_steps]
-            # output = fine_coarse_output[:, :, self.num_steps:]
-            # all_output = torch.cat([fine_output, output], dim=-2)
-            # all_z_vals = torch.cat([fine_z_vals, z_vals], dim=-2)
+
             _, indices = torch.sort(all_z_vals, dim=-2)
             all_z_vals = torch.gather(all_z_vals, -2, indices)
             all_output = torch.gather(all_output, -2, indices.expand(-1, -1, -1, self.feat_channels))
 
         else:
-            # output = self.tri_plane_decoder(feature_map).permute(0, 2, 1, 3)
             all_output = output
             all_z_vals = z_vals
 
@@ -650,7 +643,6 @@ class SynthesisNetwork(torch.nn.Module):
         # upsampled_img = upfirdn2d.upsample2d(x=low_img, f=self.Hz_geom.to(ws.device), up=4)
         upsampled_img = F.interpolate(low_img, scale_factor=4, mode='bilinear', align_corners=True)
 
-        # F.interpolate(low_img, scale_factor=4, mode='bilinear')
         return torch.cat([img, upsampled_img], dim=1)
 
     def feature_sample(self, triplane, query_points):
@@ -663,9 +655,9 @@ class SynthesisNetwork(torch.nn.Module):
         xz_feature_list = []
         yz_feature_list = []
         for z_idx in range(self.num_steps):
-            xy_feature_list.append(grid_sample_gradfix.grid_sample(xy_plane, query_points_xy[..., z_idx].permute(0, 2, 3, 1)))
-            xz_feature_list.append(grid_sample_gradfix.grid_sample(xz_plane, query_points_xz[..., z_idx].permute(0, 2, 3, 1)))
-            yz_feature_list.append(grid_sample_gradfix.grid_sample(yz_plane, query_points_yz[..., z_idx].permute(0, 2, 3, 1)))
+            xy_feature_list.append(grid_sample_gradfix.grid_sample(xy_plane, query_points_xy[..., z_idx].permute(0, 2, 3, 1).clamp(-1,1)))
+            xz_feature_list.append(grid_sample_gradfix.grid_sample(xz_plane, query_points_xz[..., z_idx].permute(0, 2, 3, 1).clamp(-1,1)))
+            yz_feature_list.append(grid_sample_gradfix.grid_sample(yz_plane, query_points_yz[..., z_idx].permute(0, 2, 3, 1).clamp(-1,1)))
 
         return torch.stack(xy_feature_list, dim=2) + torch.stack(xz_feature_list, dim=2) + torch.stack(yz_feature_list, dim=2)
 

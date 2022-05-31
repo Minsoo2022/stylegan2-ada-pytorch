@@ -214,6 +214,7 @@ def training_loop(
     # Setup training phases.
     if rank == 0:
         print('Setting up training phases...')
+    loss_kwargs['batch_size'] = batch_size // num_gpus
     loss = dnnlib.util.construct_class_by_name(device=device, **ddp_modules, **loss_kwargs) # subclass of training.loss.Loss
     phases = []
     for name, module, opt_kwargs, reg_interval in [('G', G, G_opt_kwargs, G_reg_interval), ('D', D, D_opt_kwargs, D_reg_interval)]:
@@ -336,7 +337,7 @@ def training_loop(
                 gain = phase.interval
                 loss.accumulate_gradients(phase=phase.name, real_img=real_img, real_c=real_c, real_m2c=real_m2c,
                                           real_c2i=real_c2i, gen_z=gen_z, gen_c=gen_c, gen_m2c=gen_m2c, gen_c2i=gen_c2i,
-                                          gen_m2c_2=gen_m2c_2, gen_c2i_2=gen_c2i_2, sync=sync, gain=gain, cur_nimg=cur_nimg)
+                                          gen_m2c_2=gen_m2c_2, gen_c2i_2=gen_c2i_2, sync=sync, gain=gain, cur_nimg=cur_nimg, rank=rank, run_dir=run_dir)
 
             # Update weights.
             phase.module.requires_grad_(False)
