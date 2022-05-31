@@ -241,7 +241,7 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
 
     # Image generation func.
     def run_generator(z, c, m2c, c2i, m2c_2, c2i_2):
-        img = G(z=z, c=c, m2c=m2c, c2i=c2i, m2c_2=m2c_2, c2i_2=c2i_2, **opts.G_kwargs)
+        img = G(z=z, c=c, m2c=m2c, c2i=c2i, m2c_2=m2c_2, c2i_2=c2i_2, swap_prob=1, **opts.G_kwargs)
         img = img[:,:3]
         img = (img * 127.5 + 128).clamp(0, 255).to(torch.uint8)
         return img
