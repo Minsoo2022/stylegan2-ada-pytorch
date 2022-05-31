@@ -6,12 +6,14 @@
 # distribution of this software and related documentation without an express
 # license agreement from NVIDIA CORPORATION is strictly prohibited.
 
+import os
 import numpy as np
 import torch
 from torch_utils import training_stats
 from torch_utils import misc
 from torch_utils.ops import conv2d_gradfix
 from torch_utils.ops import upfirdn2d
+from torchvision.utils import save_image
 
 #----------------------------------------------------------------------------
 
@@ -22,7 +24,8 @@ class Loss:
 #----------------------------------------------------------------------------
 
 class StyleGAN2Loss(Loss):
-    def __init__(self, device, G_mapping, G_synthesis, D, augment_pipe=None, style_mixing_prob=0, r1_gamma=10, pl_batch_shrink=2, pl_decay=0.01, pl_weight=2, blur_init_sigma=0, blur_fade_kimg=0):
+    def __init__(self, device, G_mapping, G_synthesis, D, augment_pipe=None, style_mixing_prob=0, r1_gamma=10,
+                 pl_batch_shrink=2, pl_decay=0.01, pl_weight=2, blur_init_sigma=0, blur_fade_kimg=0, batch_size=32): # blur_fade_kimg=200
         super().__init__()
         self.device = device
         self.G_mapping = G_mapping
@@ -37,10 +40,11 @@ class StyleGAN2Loss(Loss):
         self.pl_mean = torch.zeros([], device=device)
         self.blur_init_sigma = blur_init_sigma
         self.blur_fade_kimg = blur_fade_kimg
+        self.batch_size = batch_size
 
-    def run_G(self, z, c, m2c, c2i, sync):
+    def run_G(self, z, c, m2c, c2i, m2c_2, c2i_2, sync):
         with misc.ddp_sync(self.G_mapping, sync):
-            ws = self.G_mapping(z, c, m2c, c2i)
+            ws = self.G_mapping(z, c, m2c, c2i, m2c_2, c2i_2)
             if self.style_mixing_prob > 0:
                 with torch.autograd.profiler.record_function('style_mixing'):
                     cutoff = torch.empty([], dtype=torch.int64, device=ws.device).random_(1, ws.shape[1])
@@ -62,7 +66,7 @@ class StyleGAN2Loss(Loss):
             logits = self.D(img, c, m2c, c2i)
         return logits
 
-    def accumulate_gradients(self, phase, real_img, real_c, real_m2c, real_c2i, gen_z, gen_c, gen_m2c, gen_c2i, sync, gain, cur_nimg):
+    def accumulate_gradients(self, phase, real_img, real_c, real_m2c, real_c2i, gen_z, gen_c, gen_m2c, gen_c2i, gen_m2c_2, gen_c2i_2, sync, gain, cur_nimg, rank, run_dir):
         assert phase in ['Gmain', 'Greg', 'Gboth', 'Dmain', 'Dreg', 'Dboth']
         do_Gmain = (phase in ['Gmain', 'Gboth'])
         do_Dmain = (phase in ['Dmain', 'Dboth'])
@@ -74,12 +78,15 @@ class StyleGAN2Loss(Loss):
         # Gmain: Maximize logits for generated images.
         if do_Gmain:
             with torch.autograd.profiler.record_function('Gmain_forward'):
-                gen_img, _gen_ws = self.run_G(gen_z, gen_c, gen_m2c, gen_c2i, sync=(sync and not do_Gpl)) # May get synced by Gpl.
+                gen_img, _gen_ws = self.run_G(gen_z, gen_c, gen_m2c, gen_c2i, gen_m2c_2, gen_c2i_2, sync=(sync and not do_Gpl)) # May get synced by Gpl.
                 gen_logits = self.run_D(gen_img, gen_c, gen_m2c, gen_c2i, sync=False, blur_sigma=blur_sigma)
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
                 loss_Gmain = torch.nn.functional.softplus(-gen_logits) # -log(sigmoid(gen_logits))
                 training_stats.report('Loss/G/loss', loss_Gmain)
+                if (cur_nimg / self.batch_size) % 800 == 0 and rank == 0:
+                    img_name = int(cur_nimg//100)
+                    save_image(gen_img[:,:3].clamp(-1, 1) / 2 + 0.5, os.path.join(run_dir, f'G_fake_{img_name}.png'))
             with torch.autograd.profiler.record_function('Gmain_backward'):
                 loss_Gmain.mean().mul(gain).backward()
 
@@ -87,7 +94,7 @@ class StyleGAN2Loss(Loss):
         if do_Gpl:
             with torch.autograd.profiler.record_function('Gpl_forward'):
                 batch_size = gen_z.shape[0] // self.pl_batch_shrink
-                gen_img, gen_ws = self.run_G(gen_z[:batch_size], gen_c[:batch_size], gen_m2c[:batch_size], gen_c2i[:batch_size], sync=sync)
+                gen_img, gen_ws = self.run_G(gen_z[:batch_size], gen_c[:batch_size], gen_m2c[:batch_size], gen_c2i[:batch_size], gen_m2c_2[:batch_size], gen_c2i_2[:batch_size], sync=sync)
                 pl_noise = torch.randn_like(gen_img) / np.sqrt(gen_img.shape[2] * gen_img.shape[3])
                 with torch.autograd.profiler.record_function('pl_grads'), conv2d_gradfix.no_weight_gradients():
                     pl_grads = torch.autograd.grad(outputs=[(gen_img * pl_noise).sum()], inputs=[gen_ws], create_graph=True, only_inputs=True)[0]
@@ -105,7 +112,7 @@ class StyleGAN2Loss(Loss):
         loss_Dgen = 0
         if do_Dmain:
             with torch.autograd.profiler.record_function('Dgen_forward'):
-                gen_img, _gen_ws = self.run_G(gen_z, gen_c, gen_m2c, gen_c2i, sync=False)
+                gen_img, _gen_ws = self.run_G(gen_z, gen_c, gen_m2c, gen_c2i, gen_m2c_2, gen_c2i_2, sync=False)
                 gen_logits = self.run_D(gen_img, gen_c, gen_m2c, gen_c2i, sync=False, blur_sigma=blur_sigma) # Gets synced by loss_Dreal.
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())

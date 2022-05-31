@@ -198,6 +198,9 @@ class MappingNetwork(torch.nn.Module):
         self.w_avg_beta = w_avg_beta
         if embed_features is None:
             embed_features = w_dim
+        random_swap = True
+        if random_swap:
+            self.random_swap = random_swap
         self.cam_condition = cam_condition
         if cam_condition:
             self.cam_dim = 25
@@ -220,7 +223,7 @@ class MappingNetwork(torch.nn.Module):
         if num_ws is not None and w_avg_beta is not None:
             self.register_buffer('w_avg', torch.zeros([w_dim]))
 
-    def forward(self, z, c, m2c, c2i, truncation_psi=1, truncation_cutoff=None, skip_w_avg_update=False):
+    def forward(self, z, c, m2c, c2i, m2c_2=None, c2i_2=None, truncation_psi=1, truncation_cutoff=None, skip_w_avg_update=False):
         # Embed, normalize, and concat inputs.
         x = None
         with torch.autograd.profiler.record_function('input'):
@@ -229,6 +232,12 @@ class MappingNetwork(torch.nn.Module):
                 x = normalize_2nd_moment(z.to(torch.float32))
             if self.c_dim > 0 or self.cam_condition:
                 if self.cam_condition:
+                    if self.random_swap and m2c_2 is not None and c2i_2 is not None:
+                        rand_mask = torch.rand(z.shape[0], device=z.device) > 0.5
+                        m2c = m2c.clone()
+                        c2i = c2i.clone()
+                        m2c[rand_mask] = m2c_2[rand_mask]
+                        c2i[rand_mask] = c2i_2[rand_mask]
                     cam_c = torch.cat([m2c.reshape(-1, 16), c2i[:, :3, :3].reshape(-1, 9)], dim=1)
                     c = torch.cat([c, cam_c], dim=1)
                 misc.assert_shape(c, [None, self.c_dim + self.cam_dim])
@@ -559,13 +568,14 @@ class SynthesisNetwork(torch.nn.Module):
         # TODO: hierarchical sampling
 
         if self.cam_data_sample:
-            points, z_vals, rays_d_image = get_initial_rays_image(batch_size, self.num_steps, ws.device,
-                                                                  (self.feat_res, self.feat_res), 1.4, 2.6)
-            i2m = get_i2m(c2i, m2c)
-            origin, direction, query_points = transform_points(i2m.float(), rays_d_image, points)
-            transformed_points = query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, self.num_steps)
-            if self.point_scaling:
-                transformed_points = transformed_points * 2.5
+            with torch.no_grad():
+                points, z_vals, rays_d_image = get_initial_rays_image(batch_size, self.num_steps, ws.device,
+                                                                      (self.feat_res, self.feat_res), 1.4, 2.6)
+                i2m = get_i2m(c2i, m2c)
+                origin, direction, query_points = transform_points(i2m.float(), rays_d_image, points)
+                transformed_points = query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, self.num_steps)
+                if self.point_scaling:
+                    transformed_points = transformed_points * 2
         else:
             fov = 12
             ray_start = 0.88
@@ -639,9 +649,9 @@ class SynthesisNetwork(torch.nn.Module):
         xz_feature_list = []
         yz_feature_list = []
         for z_idx in range(self.num_steps):
-            xy_feature_list.append(grid_sample_gradfix.grid_sample(xy_plane, query_points_xy[..., z_idx].permute(0, 2, 3, 1)))
-            xz_feature_list.append(grid_sample_gradfix.grid_sample(xz_plane, query_points_xz[..., z_idx].permute(0, 2, 3, 1)))
-            yz_feature_list.append(grid_sample_gradfix.grid_sample(yz_plane, query_points_yz[..., z_idx].permute(0, 2, 3, 1)))
+            xy_feature_list.append(grid_sample_gradfix.grid_sample(xy_plane, query_points_xy[..., z_idx].permute(0, 2, 3, 1).clamp(-1,1)))
+            xz_feature_list.append(grid_sample_gradfix.grid_sample(xz_plane, query_points_xz[..., z_idx].permute(0, 2, 3, 1).clamp(-1,1)))
+            yz_feature_list.append(grid_sample_gradfix.grid_sample(yz_plane, query_points_yz[..., z_idx].permute(0, 2, 3, 1).clamp(-1,1)))
 
         return torch.stack(xy_feature_list, dim=2) + torch.stack(xz_feature_list, dim=2) + torch.stack(yz_feature_list, dim=2)
 
@@ -674,8 +684,6 @@ class Generator(torch.nn.Module):
                                           triplane_channels=triplane_channels, triplane_res=triplane_res,
                                           feat_channels=feat_channels, feat_res=feat_res, **synthesis_kwargs)
         self.num_ws = self.synthesis.num_ws
-        print('Mapping network of Generator doesnt use camera parameter conditional model')
-        mapping_kwargs.cam_condition = False
         self.mapping = MappingNetwork(z_dim=z_dim, c_dim=c_dim, w_dim=w_dim, num_ws=self.num_ws, **mapping_kwargs)
 
     def forward(self, z, c, m2c, c2i, truncation_psi=1, truncation_cutoff=None, **synthesis_kwargs):
