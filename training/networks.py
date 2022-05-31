@@ -531,11 +531,11 @@ class SynthesisNetwork(torch.nn.Module):
                 self.num_ws += block.num_torgb
             setattr(self, f'b{res}', block)
 
-        out_channels = feat_res
+        out_channels = feat_channels - 1
         for i, res in enumerate(self.sup_block_resolutions):
             in_channels = out_channels
-            # out_channels = 128 if i == 0 else 64
-            out_channels = 256 if i == 0 else 128
+            out_channels = 128 if i == 0 else 64
+            # out_channels = 256 if i == 0 else 128
             is_last = (res == self.img_resolution)
             block = SynthesisBlock(in_channels, out_channels, w_dim=w_dim, resolution=res,
                 triplane_channels=img_channels, is_last=is_last, use_fp16=False, use_noise=False, **block_kwargs)
