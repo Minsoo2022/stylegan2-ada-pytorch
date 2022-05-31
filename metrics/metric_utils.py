@@ -272,9 +272,8 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
             cam = [dataset.get_cam_param(np.random.randint(len(dataset))) for _i in range(batch_gen)]
             m2c = [m2c for m2c, c2i in cam]
             c2i = [c2i for m2c, c2i in cam]
-            m2c = torch.from_numpy(np.stack(m2c)).pin_memory().to(opts.device)
-            c2i = torch.from_numpy(np.stack(c2i)).pin_memory().to(opts.device)
-
+            m2c = torch.from_numpy(np.stack(m2c)).pin_memory().to(opts.device).float()
+            c2i = torch.from_numpy(np.stack(c2i)).pin_memory().to(opts.device).float()
             images.append(run_generator(z, c, m2c, c2i, m2c_2=m2c_2.repeat(m2c.shape[0], 1, 1), c2i_2=c2i))
         images = torch.cat(images)
         if images.shape[1] == 1:
