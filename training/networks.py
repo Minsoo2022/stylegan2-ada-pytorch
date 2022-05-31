@@ -567,8 +567,6 @@ class SynthesisNetwork(torch.nn.Module):
             block = getattr(self, f'b{res}')
             x, triplane = block(x, triplane, cur_ws, **block_kwargs)
 
-        # TODO: hierarchical sampling
-
         if self.cam_data_sample:
             with torch.no_grad():
                 points, z_vals, rays_d_image = get_initial_rays_image(batch_size, self.num_steps, ws.device,
@@ -613,7 +611,6 @@ class SynthesisNetwork(torch.nn.Module):
                 if self.point_scaling:
                     fine_query_points = fine_query_points * 2
 
-            # TODO: check ddp consistency
             fine_feature_map = self.feature_sample(triplane, fine_query_points)
             fine_output = self.tri_plane_decoder(fine_feature_map).permute(0, 2, 1, 3)
             #

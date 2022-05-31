@@ -166,7 +166,6 @@ def training_loop(
     if rank == 0:
         print('Constructing networks...')
     common_kwargs = dict(c_dim=training_set.label_dim, img_resolution=training_set.resolution, img_channels=training_set.num_channels)
-    import pdb; pdb.set_trace()
     G = dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     D = dnnlib.util.construct_class_by_name(**D_kwargs, **common_kwargs).train().requires_grad_(False).to(device) # subclass of torch.nn.Module
     G_ema = copy.deepcopy(G).eval()
@@ -243,7 +242,6 @@ def training_loop(
     if rank == 0:
         print('Exporting sample images...')
         grid_size, images, labels, m2cs, c2is, m2c_2s = setup_snapshot_image_grid(training_set=training_set)
-        # TODO
         # save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
         # grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
         grid_z = torch.randn([grid_size[1], G.z_dim], device=device).repeat(grid_size[0], 1).split(batch_gpu)
@@ -252,7 +250,6 @@ def training_loop(
         grid_c2i = c2is.to(device).split(batch_gpu)
         grid_m2c_2 = m2c_2s.to(device).split(batch_gpu)
         # images = torch.cat([G_ema(z=z, c=c, m2c=m2c, c2i=c2i, noise_mode='const').cpu() for z, c, m2c, c2i in zip(grid_z, grid_c, grid_m2c, grid_c2i)]).numpy()
-        # TODO
         # save_image_grid(images[:,:training_set.num_channels], os.path.join(run_dir, 'fakes_init.png'), drange=[-1,1], grid_size=grid_size)
 
     # Initialize logs.
