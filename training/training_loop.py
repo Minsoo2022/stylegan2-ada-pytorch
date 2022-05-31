@@ -16,6 +16,7 @@ import PIL.Image
 import numpy as np
 import torch
 import dnnlib
+from torch.nn import functional as F
 from torch_utils import misc
 from torch_utils import training_stats
 from torch_utils.ops import conv2d_gradfix
@@ -27,10 +28,6 @@ from volumetric_rendering import cal_m2c
 import legacy
 from metrics import metric_main
 
-sym6 =[0.015404109327027373, 0.0034907120842174702, -0.11799011114819057, -0.048311742585633, 0.4910559419267466,
-         0.787641141030194, 0.3379294217276218, -0.07263752278646252, -0.021060292512300564, 0.04472490177066578,
-         0.0017677118642428036, -0.007800708325034148]
-Hz_geom = upfirdn2d.setup_filter(sym6)
 
 #----------------------------------------------------------------------------
 
@@ -286,9 +283,12 @@ def training_loop(
             phase_real_img, phase_real_c, phase_real_m2c, phase_real_c2i = next(training_set_iterator)
             phase_real_img = (phase_real_img.to(device).to(torch.float32) / 127.5 - 1)
             phase_real_img_ori = phase_real_img.clone()
-            low_path_filter = Hz_geom.to(device)
-            phase_real_img = upfirdn2d.downsample2d(x=phase_real_img, f=low_path_filter, down=4)
-            phase_real_img = upfirdn2d.upsample2d(x=phase_real_img, f=low_path_filter, up=4)
+            # low_path_filter = Hz_geom.to(device)
+            # phase_real_img = upfirdn2d.downsample2d(x=phase_real_img, f=low_path_filter, down=4)
+            # phase_real_img = upfirdn2d.upsample2d(x=phase_real_img, f=low_path_filter, up=4)
+            # F.interpolate(low_img, scale_factor=4, mode='bilinear')
+            phase_real_img = F.interpolate(phase_real_img, scale_factor=1/4, recompute_scale_factor=False)
+            phase_real_img = F.interpolate(phase_real_img, scale_factor=4, mode='bilinear', align_corners=True)
             phase_real_img = torch.cat([phase_real_img_ori, phase_real_img], dim=1)
             phase_real_img = phase_real_img.split(batch_gpu)
             phase_real_c = phase_real_c.to(device).split(batch_gpu)

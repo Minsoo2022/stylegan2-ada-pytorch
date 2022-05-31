@@ -506,11 +506,6 @@ class SynthesisNetwork(torch.nn.Module):
         self.sup_block_resolutions = [2 ** i for i in range(int(np.log2(feat_res)) + 1, int(np.log2(img_resolution)) + 1)]
         channels_dict = {res: min(channel_base // res, channel_max) for res in self.block_resolutions}
         fp16_resolution = max(2 ** (self.triplane_resolution_log2 + 1 - num_fp16_res), 8)
-        sym6 = [0.015404109327027373, 0.0034907120842174702, -0.11799011114819057, -0.048311742585633,
-                0.4910559419267466,
-                0.787641141030194, 0.3379294217276218, -0.07263752278646252, -0.021060292512300564, 0.04472490177066578,
-                0.0017677118642428036, -0.007800708325034148]
-        self.register_buffer('Hz_geom', upfirdn2d.setup_filter(sym6))
 
         self.num_ws = 0
         for res in self.block_resolutions:
@@ -528,7 +523,8 @@ class SynthesisNetwork(torch.nn.Module):
         out_channels = feat_res
         for i, res in enumerate(self.sup_block_resolutions):
             in_channels = out_channels
-            out_channels = 128 if i == 0 else 64
+            # out_channels = 128 if i == 0 else 64
+            out_channels = 256 if i == 0 else 128
             is_last = (res == self.img_resolution)
             block = SynthesisBlock(in_channels, out_channels, w_dim=w_dim, resolution=res,
                 triplane_channels=img_channels, is_last=is_last, use_fp16=False, use_noise=False, **block_kwargs)
@@ -590,7 +586,37 @@ class SynthesisNetwork(torch.nn.Module):
 
         feature_map = self.feature_sample(triplane, transformed_points)
         output = self.tri_plane_decoder(feature_map).permute(0, 2, 1, 3)
-        pixels, depth, weights = fancy_integration(output, z_vals, ws.device)
+        # import pdb; pdb.set_trace()
+        if self.importance_sampling:
+            with torch.no_grad():
+                _, _, weights = fancy_integration(output, z_vals, ws.device)
+                weights = weights.reshape(batch_size * self.feat_res * self.feat_res, self.num_steps) + 1e-5
+                z_vals = z_vals.reshape(batch_size * self.feat_res * self.feat_res, self.num_steps)
+                z_vals_mid = 0.5 * (z_vals[:, :-1] + z_vals[:, 1:])
+                z_vals = z_vals.reshape(batch_size, self.feat_res * self.feat_res, self.num_steps, 1)
+                fine_z_vals = sample_pdf(z_vals_mid, weights[:, 1:-1], self.num_steps, det=False).detach()
+                fine_z_vals = fine_z_vals.reshape(batch_size, self.feat_res * self.feat_res, self.num_steps, 1)
+                fine_query_points = origin + direction * fine_z_vals
+                fine_query_points = fine_query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, self.num_steps)
+                if self.point_scaling:
+                    fine_query_points = fine_query_points * 2
+
+            # TODO: check ddp consistency
+            fine_feature_map = self.feature_sample(triplane, fine_query_points)
+            fine_output = self.tri_plane_decoder(fine_feature_map).permute(0, 2, 1, 3)
+            #
+            all_output = torch.cat([fine_output, output], dim = -2)
+            all_z_vals = torch.cat([fine_z_vals, z_vals], dim = -2)
+
+            _, indices = torch.sort(all_z_vals, dim=-2)
+            all_z_vals = torch.gather(all_z_vals, -2, indices)
+            all_output = torch.gather(all_output, -2, indices.expand(-1, -1, -1, self.feat_channels))
+
+        else:
+            all_output = output
+            all_z_vals = z_vals
+
+        pixels, depth, weights = fancy_integration(all_output, all_z_vals, ws.device)
         pixels = pixels.reshape(batch_size, self.feat_res, self.feat_res, self.feat_channels-1).permute(0,3,1,2)
         low_img = pixels[:, :3]
 
@@ -598,7 +624,9 @@ class SynthesisNetwork(torch.nn.Module):
         for res, cur_ws in zip(self.sup_block_resolutions, sup_block_ws):
             sup_block = getattr(self, f'sup_b{res}')
             pixels, img = sup_block(pixels, img, cur_ws, **block_kwargs)
-        upsampled_img = upfirdn2d.upsample2d(x=low_img, f=self.Hz_geom.to(ws.device), up=4)
+        # upsampled_img = upfirdn2d.upsample2d(x=low_img, f=self.Hz_geom.to(ws.device), up=4)
+        upsampled_img = F.interpolate(low_img, scale_factor=4, mode='bilinear', align_corners=True)
+
         return torch.cat([img, upsampled_img], dim=1)
 
     def feature_sample(self, triplane, query_points):
