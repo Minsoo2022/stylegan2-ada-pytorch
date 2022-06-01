@@ -15,6 +15,7 @@ import uuid
 import numpy as np
 import torch
 import dnnlib
+from volumetric_rendering import cal_m2c
 
 #----------------------------------------------------------------------------
 
@@ -239,8 +240,9 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
     dataset = dnnlib.util.construct_class_by_name(**opts.dataset_kwargs)
 
     # Image generation func.
-    def run_generator(z, c, m2c, c2i):
-        img = G(z=z, c=c, m2c=m2c, c2i=c2i, **opts.G_kwargs)
+    def run_generator(z, c, m2c, c2i, m2c_2, c2i_2):
+        img = G(z=z, c=c, m2c=m2c, c2i=c2i, m2c_2=m2c_2, c2i_2=c2i_2, swap_prob=1, **opts.G_kwargs)
+        img = img[:,:3]
         img = (img * 127.5 + 128).clamp(0, 255).to(torch.uint8)
         return img
 
@@ -259,6 +261,7 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
     detector = get_feature_detector(url=detector_url, device=opts.device, num_gpus=opts.num_gpus, rank=opts.rank, verbose=progress.verbose)
 
     # Main loop.
+    m2c_2 = cal_m2c([0], [0]).pin_memory().to(opts.device)
     while not stats.is_full():
         images = []
         for _i in range(batch_size // batch_gen):
@@ -269,10 +272,9 @@ def compute_feature_stats_for_generator(opts, detector_url, detector_kwargs, rel
             cam = [dataset.get_cam_param(np.random.randint(len(dataset))) for _i in range(batch_gen)]
             m2c = [m2c for m2c, c2i in cam]
             c2i = [c2i for m2c, c2i in cam]
-            m2c = torch.from_numpy(np.stack(m2c)).pin_memory().to(opts.device)
-            c2i = torch.from_numpy(np.stack(c2i)).pin_memory().to(opts.device)
-
-            images.append(run_generator(z, c, m2c, c2i))
+            m2c = torch.from_numpy(np.stack(m2c)).pin_memory().to(opts.device).float()
+            c2i = torch.from_numpy(np.stack(c2i)).pin_memory().to(opts.device).float()
+            images.append(run_generator(z, c, m2c, c2i, m2c_2=m2c_2.repeat(m2c.shape[0], 1, 1), c2i_2=c2i))
         images = torch.cat(images)
         if images.shape[1] == 1:
             images = images.repeat([1, 3, 1, 1])

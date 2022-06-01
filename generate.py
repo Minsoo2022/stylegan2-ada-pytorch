@@ -17,6 +17,7 @@ import dnnlib
 import numpy as np
 import PIL.Image
 import torch
+from torch_utils import misc
 
 import legacy
 from volumetric_rendering import cal_m2c
@@ -81,8 +82,25 @@ def generate_images(
 
     print('Loading networks from "%s"...' % network_pkl)
     device = torch.device('cuda')
-    with dnnlib.util.open_url(network_pkl) as f:
-        G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
+
+    if True:
+        G_kwargs = {'class_name': 'training.networks.Generator', 'z_dim': 512, 'w_dim': 512, 'triplane_channels': 96,
+         'triplane_res': 256, 'feat_channels': 33, 'feat_res': 32,
+         'mapping_kwargs': {'num_layers': 8, 'cam_condition': True},
+         'synthesis_kwargs': {'channel_base': 32768, 'channel_max': 512, 'num_fp16_res': 4, 'conv_clamp': 256,
+                              'cam_data_sample': True, 'importance_sampling': True, 'point_scaling': True, 'num_steps': 24}}
+
+        common_kwargs = {'c_dim': 0, 'img_resolution': 128, 'img_channels': 3}
+
+        G = dnnlib.util.construct_class_by_name(**G_kwargs, **common_kwargs).eval().requires_grad_(False).to(device)
+
+        with dnnlib.util.open_url(network_pkl) as f:
+            resume_data = legacy.load_network_pkl(f)
+        for name, module in [('G_ema', G)]:
+            misc.copy_params_and_buffers(resume_data[name], module, require_all=False)
+    else:
+        with dnnlib.util.open_url(network_pkl) as f:
+            G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
 
     os.makedirs(outdir, exist_ok=True)
 
@@ -114,22 +132,36 @@ def generate_images(
             print ('warn: --class=lbl ignored when running on an unconditional network')
 
     # Generate images.
-    theta = [0.2, 0, -0.2]
-    phi = [0, 0, 0]
-    gw = 3
+    theta = [0.4, 0.2, 0, -0.2, -0.4]
+    phi = [0, 0, 0, 0, 0]
+
+    theta_0 = [0, 0, 0, 0, 0]
+    phi_0 = [0, 0, 0, 0, 0]
+
+    gw = 5
     gh = 1
     batch_size = len(theta)
-    c2i =torch.Tensor([[[9.0579, 0.0000, 0.0000, 0.0000],
+    c2i_default =torch.Tensor([[[9.0579, 0.0000, 0.0000, 0.0000],
          [0.0000, 9.0579, 0.0000, 0.0000],
          [0.0000, 0.0000, 1.0000, 0.0000]]])
 
     for seed_idx, seed in enumerate(seeds):
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
         z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
-        c2i = c2i.repeat(batch_size, 1, 1).to(device)
+        c2i = c2i_default.repeat(batch_size, 1, 1).to(device)
         m2c = cal_m2c(theta, phi).to(device)
-        img = G(z, label, m2c, c2i,truncation_psi=truncation_psi, noise_mode=noise_mode)
+        img = G(z.repeat(gw*gh,1), label.repeat(gw*gh,1), m2c, c2i, truncation_psi=truncation_psi, noise_mode=noise_mode)
         save_image_grid(img[:,:3].cpu(), f'{outdir}/seed{seed:04d}.png', drange=[-1,1], grid_size=(gw, gh))
+
+    for seed_idx, seed in enumerate(seeds):
+        print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
+        z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
+        c2i = c2i_default.repeat(batch_size, 1, 1).to(device)
+        m2c = cal_m2c(theta, phi).to(device)
+        m2c_2 = cal_m2c(theta_0, phi_0).to(device)
+        img = G(z.repeat(gw*gh,1), label.repeat(gw*gh,1), m2c, c2i, m2c_2=m2c_2, c2i_2=c2i, swap_prob=0, truncation_psi=truncation_psi, noise_mode=noise_mode)
+        save_image_grid(img[:,:3].cpu(), f'{outdir}/gconfix_seed{seed:04d}.png', drange=[-1,1], grid_size=(gw, gh))
+
 
 
 #----------------------------------------------------------------------------

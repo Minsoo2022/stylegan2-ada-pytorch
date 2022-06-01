@@ -69,14 +69,17 @@ def setup_snapshot_image_grid(training_set, random_seed=0):
     # Load data.
     images, _, _, _ = zip(*[training_set[i] for i in grid_indices])
     _, labels, m2c, c2i = zip(*[training_set[i] for i in range(gh)])
-    theta = [0.6, 0.3 , 0, -0.3, -0.6]
-    phi = [0, 0, 0, 0, 0]
-    m2c = cal_m2c(theta, phi)
+    theta = [0.6, 0.3, 0, -0.3, -0.6]
+    theta_zero = [0, 0, 0, 0, 0]
+    phi_zero = [0, 0, 0, 0, 0]
+    m2c = cal_m2c(theta, phi_zero)
+    m2c_2 = cal_m2c(theta_zero, phi_zero)
 
     return (gw, gh), torch.from_numpy(np.stack(images)), \
            torch.from_numpy(np.vstack([np.stack(labels)] * gw)), \
-           torch.from_numpy(np.stack([np.stack(m2c)])).repeat(gh,1,1,1).permute(1,0,2,3).reshape(gw*gh,4,4)\
-        , torch.from_numpy(np.vstack([np.stack(c2i)] * gw))
+           torch.from_numpy(np.stack([np.stack(m2c)])).repeat(gh,1,1,1).permute(1,0,2,3).reshape(gw*gh,4,4), \
+           torch.from_numpy(np.vstack([np.stack(c2i)] * gw)), \
+           torch.from_numpy(np.stack([np.stack(m2c_2)])).repeat(gh,1,1,1).permute(1,0,2,3).reshape(gw*gh,4,4)
 
 #----------------------------------------------------------------------------
 
@@ -238,16 +241,15 @@ def training_loop(
     grid_c = None
     if rank == 0:
         print('Exporting sample images...')
-        grid_size, images, labels, m2cs, c2is = setup_snapshot_image_grid(training_set=training_set)
-        # TODO
+        grid_size, images, labels, m2cs, c2is, m2c_2s = setup_snapshot_image_grid(training_set=training_set)
         # save_image_grid(images, os.path.join(run_dir, 'reals.png'), drange=[0,255], grid_size=grid_size)
         # grid_z = torch.randn([labels.shape[0], G.z_dim], device=device).split(batch_gpu)
         grid_z = torch.randn([grid_size[1], G.z_dim], device=device).repeat(grid_size[0], 1).split(batch_gpu)
         grid_c = labels.to(device).split(batch_gpu)
         grid_m2c = m2cs.to(device).split(batch_gpu)
         grid_c2i = c2is.to(device).split(batch_gpu)
+        grid_m2c_2 = m2c_2s.to(device).split(batch_gpu)
         # images = torch.cat([G_ema(z=z, c=c, m2c=m2c, c2i=c2i, noise_mode='const').cpu() for z, c, m2c, c2i in zip(grid_z, grid_c, grid_m2c, grid_c2i)]).numpy()
-        # TODO
         # save_image_grid(images[:,:training_set.num_channels], os.path.join(run_dir, 'fakes_init.png'), drange=[-1,1], grid_size=grid_size)
 
     # Initialize logs.
@@ -284,10 +286,6 @@ def training_loop(
             phase_real_img, phase_real_c, phase_real_m2c, phase_real_c2i = next(training_set_iterator)
             phase_real_img = (phase_real_img.to(device).to(torch.float32) / 127.5 - 1)
             phase_real_img_ori = phase_real_img.clone()
-            # low_path_filter = Hz_geom.to(device)
-            # phase_real_img = upfirdn2d.downsample2d(x=phase_real_img, f=low_path_filter, down=4)
-            # phase_real_img = upfirdn2d.upsample2d(x=phase_real_img, f=low_path_filter, up=4)
-            # F.interpolate(low_img, scale_factor=4, mode='bilinear')
             phase_real_img = F.interpolate(phase_real_img, scale_factor=1/4, recompute_scale_factor=False)
             phase_real_img = F.interpolate(phase_real_img, scale_factor=4, mode='bilinear', align_corners=True)
             phase_real_img = torch.cat([phase_real_img_ori, phase_real_img], dim=1)
@@ -403,6 +401,12 @@ def training_loop(
             save_image_grid(images[:, :training_set.num_channels].reshape(grid_size[0], grid_size[1], -1).
                             transpose(1, 0,2).reshape(images[:, :training_set.num_channels].shape),
                             os.path.join(run_dir, f'fakes{cur_nimg//1000:06d}.png'), drange=[-1, 1], grid_size=grid_size)
+            images = torch.cat([G_ema(z=z, c=c, m2c=m2c, c2i=c2i, m2c_2=m2c_2, c2i_2=c2i, swap_prob=0, noise_mode='const').cpu() for
+                 z, c, m2c, c2i, m2c_2 in zip(grid_z, grid_c, grid_m2c, grid_c2i, grid_m2c_2)]).numpy()
+            save_image_grid(images[:, :training_set.num_channels].reshape(grid_size[0], grid_size[1], -1).
+                            transpose(1, 0, 2).reshape(images[:, :training_set.num_channels].shape),
+                            os.path.join(run_dir, f'fakes_G_fix{cur_nimg // 1000:06d}.png'), drange=[-1, 1],
+                            grid_size=grid_size)
         # Save network snapshot.
         snapshot_pkl = None
         snapshot_data = None

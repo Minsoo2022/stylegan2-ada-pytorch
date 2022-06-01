@@ -91,7 +91,7 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--data', help='Dataset to evaluate metrics against (directory or zip) [default: same as training data]', metavar='PATH')
 @click.option('--mirror', help='Whether the dataset was augmented with x-flips during training [default: look up]', type=bool, metavar='BOOL')
 @click.option('--gpus', help='Number of GPUs to use', type=int, default=1, metavar='INT', show_default=True)
-@click.option('--verbose', help='Print optional information', type=bool, default=True, metavar='BOOL', show_default=True)
+@click.option('--verbose', help='Print optional information', type=bool, default=False, metavar='BOOL', show_default=True)
 
 def calc_metrics(ctx, network_pkl, metrics, data, mirror, gpus, verbose):
     """Calculate quality metrics for previous training run or pretrained network pickle.

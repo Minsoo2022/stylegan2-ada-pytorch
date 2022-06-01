@@ -223,7 +223,7 @@ class MappingNetwork(torch.nn.Module):
         if num_ws is not None and w_avg_beta is not None:
             self.register_buffer('w_avg', torch.zeros([w_dim]))
 
-    def forward(self, z, c, m2c, c2i, m2c_2=None, c2i_2=None, truncation_psi=1, truncation_cutoff=None, skip_w_avg_update=False):
+    def forward(self, z, c, m2c, c2i, m2c_2=None, c2i_2=None, truncation_psi=1, truncation_cutoff=None, skip_w_avg_update=False, swap_prob=1):
         # Embed, normalize, and concat inputs.
         x = None
         with torch.autograd.profiler.record_function('input'):
@@ -233,7 +233,7 @@ class MappingNetwork(torch.nn.Module):
             if self.c_dim > 0 or self.cam_condition:
                 if self.cam_condition:
                     if self.random_swap and m2c_2 is not None and c2i_2 is not None:
-                        rand_mask = torch.rand(z.shape[0], device=z.device) > 0.5
+                        rand_mask = torch.rand(z.shape[0], device=z.device) > swap_prob
                         m2c = m2c.clone()
                         c2i = c2i.clone()
                         m2c[rand_mask] = m2c_2[rand_mask]
@@ -277,7 +277,7 @@ class TriPlaneDecoder(torch.nn.Module):
         input_dim=32,
         c_dim=64,                      # Conditioning label (C) dimensionality, 0 = no label.
         out_dim=33,
-        lr_multiplier=0.1,     # Learning rate multiplier for the tri-plane decoder.
+        lr_multiplier=0.01,     # Learning rate multiplier for the tri-plane decoder.
     ):
         super().__init__()
         self.input_dim = input_dim
@@ -529,7 +529,7 @@ class SynthesisNetwork(torch.nn.Module):
                 self.num_ws += block.num_torgb
             setattr(self, f'b{res}', block)
 
-        out_channels = feat_res
+        out_channels = feat_channels - 1
         for i, res in enumerate(self.sup_block_resolutions):
             in_channels = out_channels
             # out_channels = 128 if i == 0 else 64
@@ -565,8 +565,6 @@ class SynthesisNetwork(torch.nn.Module):
             block = getattr(self, f'b{res}')
             x, triplane = block(x, triplane, cur_ws, **block_kwargs)
 
-        # TODO: hierarchical sampling
-
         if self.cam_data_sample:
             with torch.no_grad():
                 points, z_vals, rays_d_image = get_initial_rays_image(batch_size, self.num_steps, ws.device,
@@ -577,22 +575,7 @@ class SynthesisNetwork(torch.nn.Module):
                 if self.point_scaling:
                     transformed_points = transformed_points * 2
         else:
-            fov = 12
-            ray_start = 0.88
-            ray_end = 1.12
-            h_stddev = 0.3
-            v_stddev = 0.3
-            h_mean = 1.57
-            v_mean = 1.57
-            sample_dist = 'gaussian'
-            points_cam, z_vals, rays_d_cam = get_initial_rays_trig(batch_size, self.num_steps, resolution=(self.feat_res, self.feat_res),
-                                                                   device=ws.device, fov=fov, ray_start=ray_start,
-                                                                   ray_end=ray_end)
-            transformed_points, z_vals, transformed_ray_directions, transformed_ray_origins, pitch, yaw = transform_sampled_points(
-                points_cam, z_vals, rays_d_cam, h_stddev=h_stddev, v_stddev=v_stddev, h_mean=h_mean, v_mean=v_mean,
-                device=ws.device, mode=sample_dist)
-            transformed_points = transformed_points.reshape(batch_size, self.feat_res, self.feat_res, self.num_steps, 3).permute(0,4,1,2,3)
-            transformed_points = transformed_points * 5
+            raise NotImplementedError()
 
         feature_map = self.feature_sample(triplane, transformed_points)
         output = self.tri_plane_decoder(feature_map).permute(0, 2, 1, 3)
@@ -611,7 +594,6 @@ class SynthesisNetwork(torch.nn.Module):
                 if self.point_scaling:
                     fine_query_points = fine_query_points * 2
 
-            # TODO: check ddp consistency
             fine_feature_map = self.feature_sample(triplane, fine_query_points)
             fine_output = self.tri_plane_decoder(fine_feature_map).permute(0, 2, 1, 3)
             #
@@ -686,8 +668,11 @@ class Generator(torch.nn.Module):
         self.num_ws = self.synthesis.num_ws
         self.mapping = MappingNetwork(z_dim=z_dim, c_dim=c_dim, w_dim=w_dim, num_ws=self.num_ws, **mapping_kwargs)
 
-    def forward(self, z, c, m2c, c2i, truncation_psi=1, truncation_cutoff=None, **synthesis_kwargs):
-        ws = self.mapping(z, c, m2c, c2i, truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff)
+    def forward(self, z, c, m2c, c2i, m2c_2=None, c2i_2=None, truncation_psi=1, truncation_cutoff=None, swap_prob=0, **synthesis_kwargs):
+        if m2c_2 is None and c2i_2 is None:
+            m2c_2 = m2c.clone()
+            c2i_2 = c2i.clone()
+        ws = self.mapping(z, c, m2c, c2i, m2c_2, c2i_2, truncation_psi=truncation_psi, truncation_cutoff=truncation_cutoff, swap_prob=swap_prob)
         img = self.synthesis(ws, m2c, c2i, **synthesis_kwargs)
         return img
 

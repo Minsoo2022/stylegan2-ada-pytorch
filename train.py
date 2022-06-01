@@ -83,6 +83,7 @@ def setup_training_loop_kwargs(
     # Transfer learning.
     resume     = None, # Load previous network: 'noresume' (default), 'ffhq256', 'ffhq512', 'ffhq1024', 'celebahq256', 'lsundog256', <file>, <url>
     freezed    = None, # Freeze-D: <int>, default = 0 discriminator layers
+    resume_kimg= None,
 
     # Performance options (not included in desc).
     fp32       = None, # Disable mixed-precision training: <bool>, default = False
@@ -110,7 +111,7 @@ def setup_training_loop_kwargs(
     if snap < 1:
         raise UserError('--snap must be at least 1')
     args.image_snapshot_ticks = snap
-    args.network_snapshot_ticks = snap * 20
+    args.network_snapshot_ticks = snap * 30
 
     if metrics is None:
         metrics = ['fid50k_full']
@@ -193,12 +194,14 @@ def setup_training_loop_kwargs(
         'paper512':  dict(ref_gpus=8,  kimg=25000,  mb=64, mbstd=8,  fmaps=1,   lrate=0.0025,                gamma=0.5,  ema=20,  ramp=None, map=8),
         'paper1024': dict(ref_gpus=8,  kimg=25000,  mb=32, mbstd=4,  fmaps=1,   lrate=0.002,                 gamma=2,    ema=10,  ramp=None, map=8),
         'cifar':     dict(ref_gpus=2,  kimg=100000, mb=64, mbstd=32, fmaps=1,   lrate=0.0025,                gamma=0.01, ema=500, ramp=0.05, map=2),
-        '128_gpu1':  dict(ref_gpus=1,  kimg=25000,  mb=32, mbstd=8,  fmaps=1,   Glrate=0.0025, Dlrate=0.002, gamma=1,    ema=20,  ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=48),
+        '128_gpu1':  dict(ref_gpus=1,  kimg=25000,  mb=32, mbstd=8,  fmaps=1,   Glrate=0.0025, Dlrate=0.002, gamma=1,    ema=20,  ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=24),
         '128_gpu2': dict(ref_gpus=2, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20,
                          ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=48),
         '128_gpu4':  dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20, ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=48),
         '128_gpu4_noscale': dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20,
                          ramp=None, map=8, importance_sampling=True, point_scaling=False, num_steps=48),
+        '128_gpu4_upb': dict(ref_gpus=4, kimg=25000, mb=64, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20,
+                         ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=48),
 
         '128_gpu4_2': dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20,
                          ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=48),
@@ -221,7 +224,7 @@ def setup_training_loop_kwargs(
         spec.gamma = 0.0002 * (res ** 2) / spec.mb # heuristic formula
         spec.ema = spec.mb * 10 / 32
 
-    args.G_kwargs = dnnlib.EasyDict(class_name='training.networks.Generator', z_dim=512, w_dim=512, triplane_channels=96, triplane_res=256,
+    args.G_kwargs = dnnlib.EasyDict(class_name='training.networks.Generator', z_dim=512, w_dim=512, triplane_channels=96, triplane_res=128,
                                     feat_channels=33, feat_res=32, mapping_kwargs=dnnlib.EasyDict(), synthesis_kwargs=dnnlib.EasyDict())
     args.D_kwargs = dnnlib.EasyDict(class_name='training.networks.Discriminator', block_kwargs=dnnlib.EasyDict(), mapping_kwargs=dnnlib.EasyDict(), epilogue_kwargs=dnnlib.EasyDict())
     args.G_kwargs.synthesis_kwargs.channel_base = args.D_kwargs.channel_base = int(spec.fmaps * 32768)
@@ -380,6 +383,9 @@ def setup_training_loop_kwargs(
         desc += f'-freezed{freezed:d}'
         args.D_kwargs.block_kwargs.freeze_layers = freezed
 
+    if resume_kimg is not None:
+        args.resume_kimg = resume_kimg
+
     # -------------------------------------------------
     # Performance options: fp32, nhwc, nobench, workers
     # -------------------------------------------------
@@ -474,7 +480,7 @@ class CommaSeparatedList(click.ParamType):
 
 # Base config.
 @click.option('--cfg', help='Base config [default: auto]', type=click.Choice(['auto', 'stylegan2', 'paper256', 'paper512', 'paper1024', 'cifar', 'debug',
-                                                                              '128_gpu1', '128_gpu2', '128_gpu4', '128_gpu4_noscale',
+                                                                              '128_gpu1', '128_gpu2', '128_gpu4', '128_gpu4_upb', '128_gpu4_noscale',
                                                                               '128_gpu4_2','128_gpu4_noim', '128_gpu2_noim']))
 @click.option('--gamma', help='Override R1 gamma', type=float)
 @click.option('--kimg', help='Override training duration', type=int, metavar='INT')
@@ -489,6 +495,7 @@ class CommaSeparatedList(click.ParamType):
 # Transfer learning.
 @click.option('--resume', help='Resume training [default: noresume]', metavar='PKL')
 @click.option('--freezed', help='Freeze-D [default: 0 layers]', type=int, metavar='INT')
+@click.option('--resume_kimg', help='Kimg when resuming training [default: 0]', type=int, metavar='INT')
 
 # Performance options.
 @click.option('--fp32', help='Disable mixed-precision training', type=bool, metavar='BOOL')
