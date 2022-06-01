@@ -83,6 +83,7 @@ def setup_training_loop_kwargs(
     # Transfer learning.
     resume     = None, # Load previous network: 'noresume' (default), 'ffhq256', 'ffhq512', 'ffhq1024', 'celebahq256', 'lsundog256', <file>, <url>
     freezed    = None, # Freeze-D: <int>, default = 0 discriminator layers
+    resume_kimg= None,
 
     # Performance options (not included in desc).
     fp32       = None, # Disable mixed-precision training: <bool>, default = False
@@ -199,6 +200,8 @@ def setup_training_loop_kwargs(
         '128_gpu4':  dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20, ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=48),
         '128_gpu4_noscale': dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20,
                          ramp=None, map=8, importance_sampling=True, point_scaling=False, num_steps=48),
+        '128_gpu4_upb': dict(ref_gpus=4, kimg=25000, mb=64, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20,
+                         ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=48),
 
         '128_gpu4_2': dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20,
                          ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=48),
@@ -380,6 +383,9 @@ def setup_training_loop_kwargs(
         desc += f'-freezed{freezed:d}'
         args.D_kwargs.block_kwargs.freeze_layers = freezed
 
+    if resume_kimg is not None:
+        args.resume_kimg = resume_kimg
+
     # -------------------------------------------------
     # Performance options: fp32, nhwc, nobench, workers
     # -------------------------------------------------
@@ -474,7 +480,7 @@ class CommaSeparatedList(click.ParamType):
 
 # Base config.
 @click.option('--cfg', help='Base config [default: auto]', type=click.Choice(['auto', 'stylegan2', 'paper256', 'paper512', 'paper1024', 'cifar', 'debug',
-                                                                              '128_gpu1', '128_gpu2', '128_gpu4', '128_gpu4_noscale',
+                                                                              '128_gpu1', '128_gpu2', '128_gpu4', '128_gpu4_upb', '128_gpu4_noscale',
                                                                               '128_gpu4_2','128_gpu4_noim', '128_gpu2_noim']))
 @click.option('--gamma', help='Override R1 gamma', type=float)
 @click.option('--kimg', help='Override training duration', type=int, metavar='INT')
@@ -489,6 +495,7 @@ class CommaSeparatedList(click.ParamType):
 # Transfer learning.
 @click.option('--resume', help='Resume training [default: noresume]', metavar='PKL')
 @click.option('--freezed', help='Freeze-D [default: 0 layers]', type=int, metavar='INT')
+@click.option('--resume_kimg', help='Kimg when resuming training [default: 0]', type=int, metavar='INT')
 
 # Performance options.
 @click.option('--fp32', help='Disable mixed-precision training', type=bool, metavar='BOOL')
