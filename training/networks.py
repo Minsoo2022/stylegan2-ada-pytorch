@@ -569,11 +569,14 @@ class SynthesisNetwork(torch.nn.Module):
             with torch.no_grad():
                 points, z_vals, rays_d_image = get_initial_rays_image(batch_size, self.num_steps, ws.device,
                                                                       (self.feat_res, self.feat_res), 1.4, 2.6)
+                if self.point_scaling:
+                    c2i = c2i.clone()
+                    c2i[:, :2, :2] /= 2.5
                 i2m = get_i2m(c2i, m2c)
                 origin, direction, query_points = transform_points(i2m.float(), rays_d_image, points)
                 transformed_points = query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, self.num_steps)
                 if self.point_scaling:
-                    transformed_points = transformed_points * 2
+                    transformed_points = transformed_points * 1.5
         else:
             raise NotImplementedError()
 
@@ -592,7 +595,7 @@ class SynthesisNetwork(torch.nn.Module):
                 fine_query_points = origin + direction * fine_z_vals
                 fine_query_points = fine_query_points.permute(0,3,1,2).reshape(batch_size, 3, self.feat_res, self.feat_res, self.num_steps)
                 if self.point_scaling:
-                    fine_query_points = fine_query_points * 2
+                    fine_query_points = fine_query_points * 1.5
 
             fine_feature_map = self.feature_sample(triplane, fine_query_points)
             fine_output = self.tri_plane_decoder(fine_feature_map).permute(0, 2, 1, 3)
