@@ -625,20 +625,18 @@ class SynthesisNetwork(torch.nn.Module):
         return torch.cat([img, upsampled_img], dim=1)
 
     def feature_sample(self, triplane, query_points):
-        xy_plane, xz_plane, yz_plane = triplane.split(int(self.triplane_channels / 3), dim=1)
+        batch_size, _, feat_res1, feat_res2, num_steps = query_points.shape
+        xy_plane, xz_plane, yz_plane = triplane.split(self.triplane_channels_div3, dim=1)
 
         query_points_xy = torch.cat((query_points[:, 0:1], query_points[:, 1:2]), dim=1)
         query_points_xz = torch.cat((query_points[:, 0:1], query_points[:, 2:3]), dim=1)
         query_points_yz = torch.cat((query_points[:, 1:2], query_points[:, 2:3]), dim=1)
-        xy_feature_list = []
-        xz_feature_list = []
-        yz_feature_list = []
-        for z_idx in range(self.num_steps):
-            xy_feature_list.append(grid_sample_gradfix.grid_sample(xy_plane, query_points_xy[..., z_idx].permute(0, 2, 3, 1).clamp(-1,1)))
-            xz_feature_list.append(grid_sample_gradfix.grid_sample(xz_plane, query_points_xz[..., z_idx].permute(0, 2, 3, 1).clamp(-1,1)))
-            yz_feature_list.append(grid_sample_gradfix.grid_sample(yz_plane, query_points_yz[..., z_idx].permute(0, 2, 3, 1).clamp(-1,1)))
 
-        return torch.stack(xy_feature_list, dim=2) + torch.stack(xz_feature_list, dim=2) + torch.stack(yz_feature_list, dim=2)
+        xy_feature = grid_sample_gradfix.grid_sample(xy_plane, query_points_xy.reshape(batch_size, 2, feat_res1, feat_res2 * num_steps).permute(0, 2, 3, 1).clamp(-1,1)).reshape(batch_size, self.triplane_channels_div3, feat_res1, feat_res2, num_steps)
+        xz_feature = grid_sample_gradfix.grid_sample(xz_plane, query_points_xz.reshape(batch_size, 2, feat_res1, feat_res2 * num_steps).permute(0, 2, 3, 1).clamp(-1,1)).reshape(batch_size, self.triplane_channels_div3, feat_res1, feat_res2, num_steps)
+        yz_feature = grid_sample_gradfix.grid_sample(yz_plane, query_points_yz.reshape(batch_size, 2, feat_res1, feat_res2 * num_steps).permute(0, 2, 3, 1).clamp(-1,1)).reshape(batch_size, self.triplane_channels_div3, feat_res1, feat_res2, num_steps)
+
+        return (xy_feature + xz_feature + yz_feature).permute(0, 1, 4, 2, 3)
 
 #----------------------------------------------------------------------------
 

@@ -25,7 +25,7 @@ class Loss:
 
 class StyleGAN2Loss(Loss):
     def __init__(self, device, G_mapping, G_synthesis, D, augment_pipe=None, style_mixing_prob=0, r1_gamma=10,
-                 pl_batch_shrink=2, pl_decay=0.01, pl_weight=2, blur_init_sigma=0, blur_fade_kimg=0, batch_size=32): # blur_fade_kimg=200
+                 pl_batch_shrink=2, pl_decay=0.01, pl_weight=2, blur_init_sigma=0, blur_fade_kimg=0, swap_fade_kimg=1500, batch_size=32): # blur_fade_kimg=200
         super().__init__()
         self.device = device
         self.G_mapping = G_mapping
@@ -41,10 +41,11 @@ class StyleGAN2Loss(Loss):
         self.blur_init_sigma = blur_init_sigma
         self.blur_fade_kimg = blur_fade_kimg
         self.batch_size = batch_size
+        self.swap_fade_kimg = swap_fade_kimg
 
-    def run_G(self, z, c, m2c, c2i, m2c_2, c2i_2, sync):
+    def run_G(self, z, c, m2c, c2i, m2c_2, c2i_2, sync, swap_prob):
         with misc.ddp_sync(self.G_mapping, sync):
-            ws = self.G_mapping(z, c, m2c, c2i, m2c_2, c2i_2, swap_prob=0.5)
+            ws = self.G_mapping(z, c, m2c, c2i, m2c_2, c2i_2, swap_prob=swap_prob)
             if self.style_mixing_prob > 0:
                 with torch.autograd.profiler.record_function('style_mixing'):
                     cutoff = torch.empty([], dtype=torch.int64, device=ws.device).random_(1, ws.shape[1])
@@ -74,11 +75,12 @@ class StyleGAN2Loss(Loss):
         do_Dr1   = (phase in ['Dreg', 'Dboth']) and (self.r1_gamma != 0)
         blur_sigma = max(1 - cur_nimg / (self.blur_fade_kimg * 1e3),
                          0) * self.blur_init_sigma if self.blur_fade_kimg > 0 else 0
+        swap_prob = max(1 - (cur_nimg / (self.swap_fade_kimg * 1e3)) / 2, 0.5) if self.swap_fade_kimg > 0 else 0.5
 
         # Gmain: Maximize logits for generated images.
         if do_Gmain:
             with torch.autograd.profiler.record_function('Gmain_forward'):
-                gen_img, _gen_ws = self.run_G(gen_z, gen_c, gen_m2c, gen_c2i, gen_m2c_2, gen_c2i_2, sync=(sync and not do_Gpl)) # May get synced by Gpl.
+                gen_img, _gen_ws = self.run_G(gen_z, gen_c, gen_m2c, gen_c2i, gen_m2c_2, gen_c2i_2, sync=(sync and not do_Gpl), swap_prob=swap_prob) # May get synced by Gpl.
                 gen_logits = self.run_D(gen_img, gen_c, gen_m2c, gen_c2i, sync=False, blur_sigma=blur_sigma)
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())
@@ -94,7 +96,7 @@ class StyleGAN2Loss(Loss):
         if do_Gpl:
             with torch.autograd.profiler.record_function('Gpl_forward'):
                 batch_size = gen_z.shape[0] // self.pl_batch_shrink
-                gen_img, gen_ws = self.run_G(gen_z[:batch_size], gen_c[:batch_size], gen_m2c[:batch_size], gen_c2i[:batch_size], gen_m2c_2[:batch_size], gen_c2i_2[:batch_size], sync=sync)
+                gen_img, gen_ws = self.run_G(gen_z[:batch_size], gen_c[:batch_size], gen_m2c[:batch_size], gen_c2i[:batch_size], gen_m2c_2[:batch_size], gen_c2i_2[:batch_size], sync=sync, swap_prob=swap_prob)
                 pl_noise = torch.randn_like(gen_img) / np.sqrt(gen_img.shape[2] * gen_img.shape[3])
                 with torch.autograd.profiler.record_function('pl_grads'), conv2d_gradfix.no_weight_gradients():
                     pl_grads = torch.autograd.grad(outputs=[(gen_img * pl_noise).sum()], inputs=[gen_ws], create_graph=True, only_inputs=True)[0]
@@ -112,7 +114,7 @@ class StyleGAN2Loss(Loss):
         loss_Dgen = 0
         if do_Dmain:
             with torch.autograd.profiler.record_function('Dgen_forward'):
-                gen_img, _gen_ws = self.run_G(gen_z, gen_c, gen_m2c, gen_c2i, gen_m2c_2, gen_c2i_2, sync=False)
+                gen_img, _gen_ws = self.run_G(gen_z, gen_c, gen_m2c, gen_c2i, gen_m2c_2, gen_c2i_2, sync=False, swap_prob=swap_prob)
                 gen_logits = self.run_D(gen_img, gen_c, gen_m2c, gen_c2i, sync=False, blur_sigma=blur_sigma) # Gets synced by loss_Dreal.
                 training_stats.report('Loss/scores/fake', gen_logits)
                 training_stats.report('Loss/signs/fake', gen_logits.sign())

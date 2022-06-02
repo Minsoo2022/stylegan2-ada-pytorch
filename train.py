@@ -111,7 +111,7 @@ def setup_training_loop_kwargs(
     if snap < 1:
         raise UserError('--snap must be at least 1')
     args.image_snapshot_ticks = snap
-    args.network_snapshot_ticks = snap * 30
+    args.network_snapshot_ticks = snap * 20
 
     if metrics is None:
         metrics = ['fid50k_full']
