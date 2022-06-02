@@ -292,14 +292,14 @@ class TriPlaneDecoder(torch.nn.Module):
         setattr(self, f'fc{1}', layer1)
 
     def forward(self, x):
-        batch_size, triplane_channels_div3, num_steps, feat_res, _ = x.shape
+        batch_size, triplane_channels_div3, num_steps, feat_res, feat_res2 = x.shape
         x = x.permute(0, 2, 3, 4, 1).reshape(-1, triplane_channels_div3)
         layer0 = getattr(self, f'fc{0}')
         layer1 = getattr(self, f'fc{1}')
         x = layer0(x)
         # x = self.activation(x)
         x = layer1(x)
-        x = x.reshape(batch_size, num_steps, feat_res * feat_res, self.out_dim)
+        x = x.reshape(batch_size, num_steps, feat_res * feat_res2, self.out_dim)
         return x
 
 #----------------------------------------------------------------------------
@@ -542,7 +542,7 @@ class SynthesisNetwork(torch.nn.Module):
                 self.num_ws += block.num_torgb
             setattr(self, f'sup_b{res}', block)
 
-    def forward(self, ws, m2c, c2i, **block_kwargs):
+    def forward(self, ws, m2c, c2i, return_triplane=False, **block_kwargs):
         batch_size = m2c.shape[0]
         block_ws = []
         sup_block_ws = []
@@ -564,6 +564,9 @@ class SynthesisNetwork(torch.nn.Module):
         for res, cur_ws in zip(self.block_resolutions, block_ws):
             block = getattr(self, f'b{res}')
             x, triplane = block(x, triplane, cur_ws, **block_kwargs)
+
+        if return_triplane:
+            return triplane
 
         if self.cam_data_sample:
             with torch.no_grad():
