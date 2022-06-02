@@ -85,7 +85,7 @@ def generate_images(
 
     if True:
         G_kwargs = {'class_name': 'training.networks.Generator', 'z_dim': 512, 'w_dim': 512, 'triplane_channels': 96,
-         'triplane_res': 256, 'feat_channels': 33, 'feat_res': 32,
+         'triplane_res': 128, 'feat_channels': 33, 'feat_res': 32,
          'mapping_kwargs': {'num_layers': 8, 'cam_condition': True},
          'synthesis_kwargs': {'channel_base': 32768, 'channel_max': 512, 'num_fp16_res': 4, 'conv_clamp': 256,
                               'cam_data_sample': True, 'importance_sampling': True, 'point_scaling': True, 'num_steps': 24}}
