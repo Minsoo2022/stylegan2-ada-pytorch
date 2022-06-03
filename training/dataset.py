@@ -40,7 +40,7 @@ class Dataset(torch.utils.data.Dataset):
 
         if self._use_cam:
             try:
-                with open('./ffhq_camera_params.json', 'r') as f:
+                with open('./ffhq_camera_params_addflip.json', 'r') as f:
                     self.cam_param_dict = json.load(f)
             except:
                 raise Exception('--cam=True requires camera parameters in ffhq_camera_params.json')
@@ -110,7 +110,10 @@ class Dataset(torch.utils.data.Dataset):
         if self._use_cam:
             image_name = self._load_image_name(self._raw_idx[idx])
             cam_param = self.cam_param_dict[image_name]
-            m2c = np.array(cam_param['w2c']) @ np.array(cam_param['m2w'])
+            if self._xflip[idx]:
+                m2c = np.array(cam_param['w2c']) @ np.array(cam_param['m2w_flip'])
+            else:
+                m2c = np.array(cam_param['w2c']) @ np.array(cam_param['m2w'])
             c2i = np.array(cam_param['c2i'])
             return m2c.copy(), c2i.copy()
         else:
