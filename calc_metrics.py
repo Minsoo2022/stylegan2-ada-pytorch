@@ -53,7 +53,9 @@ def subprocess_fn(rank, args, temp_dir):
     if rank == 0 and args.verbose:
         z = torch.empty([1, G.z_dim], device=device)
         c = torch.empty([1, G.c_dim], device=device)
-        misc.print_module_summary(G, [z, c])
+        c2i = torch.eye(3,4,device=device)[None,]
+        m2c = torch.eye(4, 4, device=device)[None,]
+        misc.print_module_summary(G, [z, c, m2c, c2i])
 
     # Calculate each metric.
     for metric in args.metrics:
@@ -91,9 +93,11 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--data', help='Dataset to evaluate metrics against (directory or zip) [default: same as training data]', metavar='PATH')
 @click.option('--mirror', help='Whether the dataset was augmented with x-flips during training [default: look up]', type=bool, metavar='BOOL')
 @click.option('--gpus', help='Number of GPUs to use', type=int, default=1, metavar='INT', show_default=True)
+@click.option('--ema', help='Use EMA for generator', type=bool, default=True, metavar='BOOL', show_default=True)
+@click.option('--num_steps', help='Number of samples for a ray', type=int, default=96, metavar='int', show_default=True)
 @click.option('--verbose', help='Print optional information', type=bool, default=False, metavar='BOOL', show_default=True)
 
-def calc_metrics(ctx, network_pkl, metrics, data, mirror, gpus, verbose):
+def calc_metrics(ctx, network_pkl, metrics, data, mirror, gpus, ema, num_steps, verbose):
     """Calculate quality metrics for previous training run or pretrained network pickle.
 
     Examples:
@@ -131,7 +135,7 @@ def calc_metrics(ctx, network_pkl, metrics, data, mirror, gpus, verbose):
     dnnlib.util.Logger(should_flush=True)
 
     # Validate arguments.
-    args = dnnlib.EasyDict(metrics=metrics, num_gpus=gpus, network_pkl=network_pkl, verbose=verbose)
+    args = dnnlib.EasyDict(metrics=metrics, num_gpus=gpus, network_pkl=network_pkl, ema=ema, verbose=verbose)
     if not all(metric_main.is_valid_metric(metric) for metric in args.metrics):
         ctx.fail('\n'.join(['--metrics can only contain the following values:'] + metric_main.list_valid_metrics()))
     if not args.num_gpus >= 1:
@@ -142,17 +146,28 @@ def calc_metrics(ctx, network_pkl, metrics, data, mirror, gpus, verbose):
         ctx.fail('--network must point to a file or URL')
     if args.verbose:
         print(f'Loading network from "{network_pkl}"...')
+        print(f'"Use G-EMA : {ema}"')
     with dnnlib.util.open_url(network_pkl, verbose=args.verbose) as f:
         network_dict = legacy.load_network_pkl(f)
-        args.G = network_dict['G_ema'] # subclass of torch.nn.Module
+        if ema:
+            args.G = network_dict['G_ema'] # subclass of torch.nn.Module
+        else:
+            args.G = network_dict['G']
+
+    # Change the num_stpes
+    args.G.synthesis.num_steps = num_steps
 
     # Initialize dataset options.
+    # if data is not None:
+    #     args.dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data)
+    # elif network_dict['training_set_kwargs'] is not None:
+    #     args.dataset_kwargs = dnnlib.EasyDict(network_dict['training_set_kwargs'])
+    # else:
+    #     ctx.fail('Could not look up dataset options; please specify --data')
+
+    args.dataset_kwargs = dnnlib.EasyDict(network_dict['training_set_kwargs'])
     if data is not None:
-        args.dataset_kwargs = dnnlib.EasyDict(class_name='training.dataset.ImageFolderDataset', path=data)
-    elif network_dict['training_set_kwargs'] is not None:
-        args.dataset_kwargs = dnnlib.EasyDict(network_dict['training_set_kwargs'])
-    else:
-        ctx.fail('Could not look up dataset options; please specify --data')
+        args.dataset_kwargs.path = data
 
     # Finalize dataset options.
     args.dataset_kwargs.resolution = args.G.img_resolution

@@ -25,7 +25,7 @@ class Loss:
 
 class StyleGAN2Loss(Loss):
     def __init__(self, device, G_mapping, G_synthesis, D, augment_pipe=None, style_mixing_prob=0, r1_gamma=10,
-                 pl_batch_shrink=2, pl_decay=0.01, pl_weight=2, blur_init_sigma=0, blur_fade_kimg=0, swap_fade_kimg=1500, batch_size=32): # blur_fade_kimg=200
+                 pl_batch_shrink=2, pl_decay=0.01, pl_weight=2, blur_init_sigma=10, blur_fade_kimg=200, swap_fade_kimg=1500, batch_size=32): # blur_fade_kimg=200
         super().__init__()
         self.device = device
         self.G_mapping = G_mapping

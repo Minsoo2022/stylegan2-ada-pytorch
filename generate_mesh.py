@@ -9,11 +9,15 @@ import PIL.Image
 import torch
 from torch.nn import functional as F
 from torch_utils import misc
+from torchvision.utils import save_image
 
 import legacy
 from volumetric_rendering import cal_m2c
 from training.training_loop import save_image_grid
 import mrcfile
+import open3d as o3d
+from skimage.measure import marching_cubes
+
 
 #----------------------------------------------------------------------------
 
@@ -78,7 +82,8 @@ def feature_sample(triplane, query_points, triplane_channels = 96):
 @click.option('--trunc', 'truncation_psi', type=float, help='Truncation psi', default=1, show_default=True)
 @click.option('--class', 'class_idx', type=int, help='Class label (unconditional if not specified)')
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
-@click.option('--projected-w', help='Projection result file', type=str, metavar='FILE')
+@click.option('--ema', help='Use EMA for generator', type=bool, default=True, metavar='BOOL', show_default=True)
+@click.option('--num_steps', help='Number of samples for a ray', type=int, default=96, metavar='int', show_default=True)
 @click.option('--outdir', help='Where to save the output images', type=str, required=True, metavar='DIR')
 def generate_meshs(
     ctx: click.Context,
@@ -88,32 +93,10 @@ def generate_meshs(
     noise_mode: str,
     outdir: str,
     class_idx: Optional[int],
-    projected_w: Optional[str]
+    ema: bool,
+    num_steps: int,
 ):
-    """Generate images using pretrained network pickle.
 
-    Examples:
-
-    \b
-    # Generate curated MetFaces images without truncation (Fig.10 left)
-    python generate.py --outdir=out --trunc=1 --seeds=85,265,297,849 \\
-        --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
-
-    \b
-    # Generate uncurated MetFaces images with truncation (Fig.12 upper left)
-    python generate.py --outdir=out --trunc=0.7 --seeds=600-605 \\
-        --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
-
-    \b
-    # Generate class conditional CIFAR-10 images (Fig.17 left, Car)
-    python generate.py --outdir=out --seeds=0-35 --class=1 \\
-        --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/cifar10.pkl
-
-    \b
-    # Render an image from projected W
-    python generate.py --outdir=out --projected_w=projected_w.npz \\
-        --network=https://nvlabs-fi-cdn.nvidia.com/stylegan2-ada-pytorch/pretrained/metfaces.pkl
-    """
 
     print('Loading networks from "%s"...' % network_pkl)
     device = torch.device('cuda')
@@ -123,7 +106,7 @@ def generate_meshs(
          'triplane_res': 128, 'feat_channels': 33, 'feat_res': 32,
          'mapping_kwargs': {'num_layers': 8, 'cam_condition': True},
          'synthesis_kwargs': {'channel_base': 32768, 'channel_max': 512, 'num_fp16_res': 4, 'conv_clamp': 256,
-                              'cam_data_sample': True, 'importance_sampling': True, 'point_scaling': True, 'num_steps': 24}}
+                              'cam_data_sample': True, 'importance_sampling': True, 'point_scaling': True, 'num_steps': 48}}
 
         common_kwargs = {'c_dim': 0, 'img_resolution': 128, 'img_channels': 3}
 
@@ -131,11 +114,21 @@ def generate_meshs(
 
         with dnnlib.util.open_url(network_pkl) as f:
             resume_data = legacy.load_network_pkl(f)
-        for name, module in [('G_ema', G)]:
-            misc.copy_params_and_buffers(resume_data[name], module, require_all=False)
+        if ema:
+            for name, module in [('G_ema', G)]:
+                misc.copy_params_and_buffers(resume_data[name], module, require_all=False)
+        else:
+            for name, module in [('G', G)]:
+                misc.copy_params_and_buffers(resume_data[name], module, require_all=False)
     else:
         with dnnlib.util.open_url(network_pkl) as f:
-            G = legacy.load_network_pkl(f)['G_ema'].to(device) # type: ignore
+            if ema:
+                G = legacy.load_network_pkl(f)['G_ema'].to(device)
+            else:
+                G = legacy.load_network_pkl(f)['G'].to(device)
+
+    # Change the num_stpes
+    G.synthesis.num_steps = num_steps
 
     os.makedirs(outdir, exist_ok=True)
 
@@ -159,11 +152,12 @@ def generate_meshs(
     theta_0 = [0]
     phi_0 = [0]
 
-    truncation_psi = 0.5
     batch_size = len(theta)
     c2i_default =torch.Tensor([[[9.0579, 0.0000, 0.0000, 0.0000],
          [0.0000, 9.0579, 0.0000, 0.0000],
          [0.0000, 0.0000, 1.0000, 0.0000]]])
+
+    marching_cubes_level = 50
 
     for seed_idx, seed in enumerate(seeds):
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
@@ -173,7 +167,7 @@ def generate_meshs(
 
         voxel_resolution = 128
         voxel_origin = [0,0,0]
-        cube_length = 2.0
+        cube_length = 1.7
 
         samples, voxel_origin, voxel_size = create_samples(voxel_resolution, voxel_origin, cube_length)
         samples = samples.to(z.device)
@@ -194,6 +188,25 @@ def generate_meshs(
         with mrcfile.new_mmap(os.path.join(outdir, f'{seed}.mrc'), overwrite=True, shape=sigmas.shape, mrc_mode=2) as mrc:
             mrc.data[:] = sigmas
 
+        verts, faces, normals, values = marching_cubes(
+            sigmas,
+            level=marching_cubes_level,
+            spacing=(1.0, 1.0, 1.0),
+            gradient_direction='descent',
+            step_size=1,
+            allow_degenerate=True,
+            method='lewiner',
+            mask=None)
+
+        verts_vec = o3d.utility.Vector3dVector(verts)
+        faces_vec = o3d.utility.Vector3iVector(faces)
+        verts_normals_vec = o3d.utility.Vector3dVector(normals)
+
+        mesh = o3d.geometry.TriangleMesh(verts_vec, faces_vec)
+        mesh.vertex_normals = verts_normals_vec
+
+        o3d.io.write_triangle_mesh(os.path.join(outdir, f'{seed}_{marching_cubes_level}.ply'), mesh)
+
     theta = [0.4, 0.2, 0, -0.2, -0.4]
     phi = [0, 0, 0, 0, 0]
 
@@ -204,13 +217,6 @@ def generate_meshs(
     gh = 1
     batch_size = len(theta)
 
-    c2i = c2i_default.repeat(batch_size, 1, 1).to(device)
-    m2c = cal_m2c(theta, phi).to(device)
-    m2c_2 = cal_m2c(theta_0, phi_0).to(device)
-    img = G(z.repeat(gw * gh, 1), label.repeat(gw * gh, 1), m2c, c2i, m2c_2=m2c_2, c2i_2=c2i, swap_prob=0,
-            truncation_psi=truncation_psi, noise_mode=noise_mode)
-    save_image_grid(img[:, :3].cpu(), f'{outdir}/gconfix_seed{seed:04d}.png', drange=[-1, 1], grid_size=(gw, gh))
-
     for seed_idx, seed in enumerate(seeds):
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
         z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
@@ -218,6 +224,10 @@ def generate_meshs(
         m2c = cal_m2c(theta, phi).to(device)
         m2c_2 = cal_m2c(theta_0, phi_0).to(device)
         img = G(z.repeat(gw*gh,1), label.repeat(gw*gh,1), m2c, c2i, m2c_2=m2c_2, c2i_2=c2i, swap_prob=0, truncation_psi=truncation_psi, noise_mode=noise_mode)
+        for i in range(len(img)):
+            save_image(img[i, :3].cpu().clamp(-1,1) / 2 + 0.5, f'{outdir}/gconfix_seed{seed:04d}_{i}.png')
+            save_image(img[i, 3:6].cpu().clamp(-1, 1) / 2 + 0.5, f'{outdir}/gconfix_seed{seed:04d}_{i}_low.png')
+
         save_image_grid(img[:,:3].cpu(), f'{outdir}/gconfix_seed{seed:04d}.png', drange=[-1,1], grid_size=(gw, gh))
 
 
