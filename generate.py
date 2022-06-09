@@ -140,8 +140,8 @@ def generate_images(
         # gw = 5
         # gh = 1
 
-        theta = [0.4, 0.4, 0.4, 0, 0, 0, -0.4, -0.4, -0.4,]
-        phi = [0.3, 0, -0.3, 0.3, 0, -0.3, 0.3, 0, -0.3,]
+        theta = [0.4, 0, -0.4, 0.4, 0, -0.4, 0.4, 0, -0.4,]
+        phi = [0.3, 0.3, 0.3, 0, 0, 0, -0.3, -0.3, -0.3,]
 
         theta_0 = [0] * 9
         phi_0 = [0] * 9
@@ -173,12 +173,12 @@ def generate_images(
             m2c_2 = cal_m2c(theta_0, phi_0).to(device)
             img = G(z.repeat(gw*gh,1), label.repeat(gw*gh,1), m2c, c2i, m2c_2=m2c_2, c2i_2=c2i, swap_prob=0, truncation_psi=truncation_psi, noise_mode=noise_mode)
             save_image_grid(img[:,:3].cpu(), f'{outdir}/rotation/gconfix_seed{seed:04d}.png', drange=[-1,1], grid_size=(gw, gh))
-            for i in range(len(img)):
-                save_image(img[i, :3].cpu().clamp(-1,1) / 2 + 0.5, f'{outdir}/rotation/gconfix_seed{seed:04d}_{i}.png')
-                # save_image(img[i, 3:6].cpu().clamp(-1,1) / 2 + 0.5, f'{outdir}/rotation/gconfix_seed{seed:04d}_{i}_low.png')
-                # super_low = F.interpolate(F.interpolate(img[i:i + 1, :3].cpu().clamp(-1, 1) / 2 + 0.5, (32, 32)),
-                #                           (128, 128), mode='bilinear', align_corners=True)
-                # save_image(super_low[0], f'{outdir}/rotation/gconfix_seed{seed:04d}_{i}_super_low_again.png')
+            # for i in range(len(img)):
+            #     save_image(img[i, :3].cpu().clamp(-1,1) / 2 + 0.5, f'{outdir}/rotation/gconfix_seed{seed:04d}_{i}.png')
+            #     save_image(img[i, 3:6].cpu().clamp(-1,1) / 2 + 0.5, f'{outdir}/rotation/gconfix_seed{seed:04d}_{i}_low.png')
+            #     super_low = F.interpolate(F.interpolate(img[i:i + 1, :3].cpu().clamp(-1, 1) / 2 + 0.5, (32, 32)),
+            #                               (128, 128), mode='bilinear', align_corners=True)
+            #     save_image(super_low[0], f'{outdir}/rotation/gconfix_seed{seed:04d}_{i}_super_low_again.png')
 
 
 # ---------------------------translation---------------------------------
@@ -191,7 +191,9 @@ def generate_images(
         phi_0 = [0] * 9
 
 
-        translation = [[-0.1, 0, 0], [0, 0, 0], [0.1, 0, 0], [-0.1, 0.1, 0], [0, 0.1, 0], [0.1, 0.1, 0], [-0.1, -0.1, 0], [0, -0.1, 0], [0.1, -0.1, 0]]
+        translation = [[-0.1, 0.1, 0],  [0, 0.1, 0],  [0.1, 0.1, 0],
+                       [-0.1, -0.1, 0], [0, -0.1, 0], [0.1, -0.1, 0],
+                       [-0.1, 0, 0],    [0, 0, 0],    [0.1, 0, 0]]
 
         gw = 3
         gh = 3
@@ -204,9 +206,10 @@ def generate_images(
             m2c = cal_m2c(theta, phi, translation).to(device)
             m2c_2 = cal_m2c(theta_0, phi_0).to(device)
             img = G(z.repeat(gw*gh,1), label.repeat(gw*gh,1), m2c, c2i, m2c_2=m2c_2, c2i_2=c2i, swap_prob=0, truncation_psi=truncation_psi, noise_mode=noise_mode)
-            for i in range(len(img)):
-                save_image(img[i, :3].cpu().clamp(-1,1) / 2 + 0.5, f'{outdir}/translation/gconfix_seed{seed:04d}_{i}.png')
-                # save_image(img[i, 3:6].cpu().clamp(-1, 1) / 2 + 0.5, f'{outdir}/translation/gconfix_seed{seed:04d}_{i}_low.png')
+            save_image_grid(img[:,:3].cpu(), f'{outdir}/translation/gconfix_seed{seed:04d}.png', drange=[-1,1], grid_size=(gw, gh))
+            # for i in range(len(img)):
+            #     save_image(img[i, :3].cpu().clamp(-1,1) / 2 + 0.5, f'{outdir}/translation/gconfix_seed{seed:04d}_{i}.png')
+            #     save_image(img[i, 3:6].cpu().clamp(-1, 1) / 2 + 0.5, f'{outdir}/translation/gconfix_seed{seed:04d}_{i}_low.png')
 
 # ----------------------random sample--------------------------------------------
     if 'random' in mode:
