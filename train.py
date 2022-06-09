@@ -28,32 +28,6 @@ class UserError(Exception):
     pass
 
 #----------------------------------------------------------------------------
-'''
-
--- Generator 관련
-    - generator는 256 discriminator는 128로 res 고정하기
-    
--- NeRF + Neural Renderer 관련
-    - 샘플된 view point에서 query 포인트 샘플
-    - tri-plane에서 feature sample
-    - decoder 구현
-    - volume rendering 가져오기
-    - importance sampling
-    
--- Superres module 관련
-    - per-pixel noise 제거
--- Discriminator 관련
-    - dual discriminator (인풋 채널 변경 및 인풋 변경)
-    - discriminator에 pose condition
--- Dataset 관련
-    - cam param 없는 데이터 제거 o
-    - cam param 로드 
-    - cam param 셔플링해서 샘플 o
-    
--- 그 외
-
-'''
-#----------------------------------------------------------------------------
 def setup_training_loop_kwargs(
     # General options (not included in desc).
     gpus       = None, # Number of GPUs: <int>, default = 1 gpu
@@ -188,27 +162,20 @@ def setup_training_loop_kwargs(
     desc += f'-{cfg}'
 
     cfg_specs = {
-        'auto':      dict(ref_gpus=-1, kimg=25000,  mb=-1, mbstd=-1, fmaps=-1,  lrate=-1,                    gamma=-1,   ema=-1,  ramp=0.05, map=2), # Populated dynamically based on resolution and GPU count.
-        'stylegan2': dict(ref_gpus=8,  kimg=25000,  mb=32, mbstd=4,  fmaps=1,   lrate=0.002,                 gamma=10,   ema=10,  ramp=None, map=8), # Uses mixed-precision, unlike the original StyleGAN2.
-        'paper256':  dict(ref_gpus=8,  kimg=25000,  mb=64, mbstd=8,  fmaps=0.5, lrate=0.0025,                gamma=1,    ema=20,  ramp=None, map=8),
-        'paper512':  dict(ref_gpus=8,  kimg=25000,  mb=64, mbstd=8,  fmaps=1,   lrate=0.0025,                gamma=0.5,  ema=20,  ramp=None, map=8),
-        'paper1024': dict(ref_gpus=8,  kimg=25000,  mb=32, mbstd=4,  fmaps=1,   lrate=0.002,                 gamma=2,    ema=10,  ramp=None, map=8),
-        'cifar':     dict(ref_gpus=2,  kimg=100000, mb=64, mbstd=32, fmaps=1,   lrate=0.0025,                gamma=0.01, ema=500, ramp=0.05, map=2),
-        '128_gpu1':  dict(ref_gpus=1,  kimg=25000,  mb=32, mbstd=8,  fmaps=1,   Glrate=0.0025, Dlrate=0.002, gamma=1,    ema=20,  ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=24),
-        '128_gpu2': dict(ref_gpus=2, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20,
-                         ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=48),
-        '128_gpu4':  dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20, ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=48),
-        '128_gpu4_noscale': dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20,
-                         ramp=None, map=8, importance_sampling=True, point_scaling=False, num_steps=48),
-        '128_gpu4_upb': dict(ref_gpus=4, kimg=25000, mb=64, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20,
-                         ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=48),
-
-        '128_gpu4_2': dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20,
-                         ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=48),
-        '128_gpu4_noim': dict(ref_gpus=4, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1, ema=20, ramp=None, map=8, importance_sampling=False, point_scaling=True, num_steps=48),
-        '128_gpu2_noim': dict(ref_gpus=2, kimg=25000, mb=32, mbstd=8, fmaps=1, Glrate=0.0025, Dlrate=0.002, gamma=1,
+        '128_gpu1':      dict(ref_gpus=1,  kimg=25000,  mb=32, mbstd=8,  fmaps=1,  Glrate=0.0025, Dlrate=0.002, gamma=1,
+                              ema=20, ramp=None, map=8, importance_sampling=True,  point_scaling=True, num_steps=24),
+        '128_gpu2':      dict(ref_gpus=2,  kimg=25000,  mb=32, mbstd=8,  fmaps=1,  Glrate=0.0025, Dlrate=0.002, gamma=1,
+                              ema=20, ramp=None, map=8, importance_sampling=True,  point_scaling=True, num_steps=48),
+        '128_gpu4':      dict(ref_gpus=4,  kimg=25000,  mb=32, mbstd=8,  fmaps=1,  Glrate=0.0025, Dlrate=0.002, gamma=1,
+                              ema=20, ramp=None, map=8, importance_sampling=True,  point_scaling=True, num_steps=48),
+        '128_gpu4_upb':  dict(ref_gpus=4,  kimg=25000,  mb=64, mbstd=8,  fmaps=1,  Glrate=0.0025, Dlrate=0.002, gamma=1,
+                              ema=20, ramp=None, map=8, importance_sampling=True,  point_scaling=True, num_steps=48),
+        '128_gpu4_noim': dict(ref_gpus=4,  kimg=25000,  mb=32, mbstd=8,  fmaps=1,  Glrate=0.0025, Dlrate=0.002, gamma=1,
                               ema=20, ramp=None, map=8, importance_sampling=False, point_scaling=True, num_steps=48),
-        'debug':     dict(ref_gpus=1,  kimg=25000,  mb=4, mbstd=8,  fmaps=1,   Glrate=0.0025, Dlrate=0.002, gamma=1,    ema=20,  ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=24),
+        '128_gpu2_noim': dict(ref_gpus=2,  kimg=25000,  mb=32, mbstd=8,  fmaps=1,  Glrate=0.0025, Dlrate=0.002, gamma=1,
+                              ema=20, ramp=None, map=8, importance_sampling=False, point_scaling=True, num_steps=48),
+        'debug':         dict(ref_gpus=1,  kimg=25000,  mb=4,  mbstd=8,  fmaps=1,  Glrate=0.0025, Dlrate=0.002, gamma=1,
+                              ema=20,  ramp=None, map=8, importance_sampling=True, point_scaling=True, num_steps=24),
     }
 
     assert cfg in cfg_specs

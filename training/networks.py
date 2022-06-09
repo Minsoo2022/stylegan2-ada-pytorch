@@ -17,7 +17,7 @@ from torch_utils.ops import bias_act
 from torch_utils.ops import fma
 from torch_utils.ops import grid_sample_gradfix
 
-from volumetric_rendering import fancy_integration, get_initial_rays_image, get_i2m, transform_points, sample_pdf, get_initial_rays_trig, transform_sampled_points
+from volumetric_rendering import fancy_integration, get_initial_rays_image, get_i2m, transform_points, sample_pdf
 
 #----------------------------------------------------------------------------
 
@@ -585,7 +585,7 @@ class SynthesisNetwork(torch.nn.Module):
 
         feature_map = self.feature_sample(triplane, transformed_points)
         output = self.tri_plane_decoder(feature_map).permute(0, 2, 1, 3)
-        # import pdb; pdb.set_trace()
+
         if self.importance_sampling:
             with torch.no_grad():
                 _, _, weights = fancy_integration(output, z_vals, ws.device)
@@ -622,7 +622,6 @@ class SynthesisNetwork(torch.nn.Module):
         for res, cur_ws in zip(self.sup_block_resolutions, sup_block_ws):
             sup_block = getattr(self, f'sup_b{res}')
             pixels, img = sup_block(pixels, img, cur_ws, **block_kwargs)
-        # upsampled_img = upfirdn2d.upsample2d(x=low_img, f=self.Hz_geom.to(ws.device), up=4)
         upsampled_img = F.interpolate(low_img, scale_factor=4, mode='bilinear', align_corners=True)
 
         return torch.cat([img, upsampled_img], dim=1)

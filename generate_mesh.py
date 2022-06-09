@@ -63,11 +63,6 @@ def feature_sample(triplane, query_points, triplane_channels = 96):
     query_points_xz = torch.cat((query_points[:, 0:1], query_points[:, 2:3]), dim=1)
     query_points_yz = torch.cat((query_points[:, 1:2], query_points[:, 2:3]), dim=1)
 
-
-    # xy_feature = F.grid_sample(xy_plane, query_points_xy.permute(0, 2, 3, 1).clamp(-1,1))
-    # xz_feature = F.grid_sample(xz_plane, query_points_xz.permute(0, 2, 3, 1).clamp(-1,1))
-    # yz_feature = F.grid_sample(yz_plane, query_points_yz.permute(0, 2, 3, 1).clamp(-1,1))
-
     xy_feature = F.grid_sample(xy_plane, query_points_xy.permute(0, 2, 3, 1).clamp(-1,1))
     xz_feature = F.grid_sample(xz_plane, query_points_xz.permute(0, 2, 3, 1).clamp(-1,1))
     yz_feature = F.grid_sample(yz_plane, query_points_yz.permute(0, 2, 3, 1).clamp(-1,1))
@@ -84,6 +79,7 @@ def feature_sample(triplane, query_points, triplane_channels = 96):
 @click.option('--noise-mode', help='Noise mode', type=click.Choice(['const', 'random', 'none']), default='const', show_default=True)
 @click.option('--ema', help='Use EMA for generator', type=bool, default=True, metavar='BOOL', show_default=True)
 @click.option('--num_steps', help='Number of samples for a ray', type=int, default=96, metavar='int', show_default=True)
+@click.option('--mc_level', help='the threshold of marching cube algorithm', type=int, default=15, metavar='int', show_default=True)
 @click.option('--outdir', help='Where to save the output images', type=str, required=True, metavar='DIR')
 def generate_meshs(
     ctx: click.Context,
@@ -95,13 +91,14 @@ def generate_meshs(
     class_idx: Optional[int],
     ema: bool,
     num_steps: int,
+    mc_level: int,
 ):
 
 
     print('Loading networks from "%s"...' % network_pkl)
     device = torch.device('cuda')
 
-    if True:
+    if False:
         G_kwargs = {'class_name': 'training.networks.Generator', 'z_dim': 512, 'w_dim': 512, 'triplane_channels': 96,
          'triplane_res': 128, 'feat_channels': 33, 'feat_res': 32,
          'mapping_kwargs': {'num_layers': 8, 'cam_condition': True},
@@ -149,15 +146,12 @@ def generate_meshs(
     theta = [0]
     phi = [0]
 
-    theta_0 = [0]
-    phi_0 = [0]
-
     batch_size = len(theta)
     c2i_default =torch.Tensor([[[9.0579, 0.0000, 0.0000, 0.0000],
          [0.0000, 9.0579, 0.0000, 0.0000],
          [0.0000, 0.0000, 1.0000, 0.0000]]])
 
-    marching_cubes_level = 50
+    marching_cubes_level = mc_level
 
     for seed_idx, seed in enumerate(seeds):
         print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
@@ -224,9 +218,8 @@ def generate_meshs(
         m2c = cal_m2c(theta, phi).to(device)
         m2c_2 = cal_m2c(theta_0, phi_0).to(device)
         img = G(z.repeat(gw*gh,1), label.repeat(gw*gh,1), m2c, c2i, m2c_2=m2c_2, c2i_2=c2i, swap_prob=0, truncation_psi=truncation_psi, noise_mode=noise_mode)
-        for i in range(len(img)):
-            save_image(img[i, :3].cpu().clamp(-1,1) / 2 + 0.5, f'{outdir}/gconfix_seed{seed:04d}_{i}.png')
-            save_image(img[i, 3:6].cpu().clamp(-1, 1) / 2 + 0.5, f'{outdir}/gconfix_seed{seed:04d}_{i}_low.png')
+        # for i in range(len(img)):
+        #     save_image(img[i, :3].cpu().clamp(-1,1) / 2 + 0.5, f'{outdir}/gconfix_seed{seed:04d}_{i}.png')
 
         save_image_grid(img[:,:3].cpu(), f'{outdir}/gconfix_seed{seed:04d}.png', drange=[-1,1], grid_size=(gw, gh))
 

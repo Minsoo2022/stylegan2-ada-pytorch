@@ -19,6 +19,7 @@ import dnnlib
 import numpy as np
 import PIL.Image
 import torch
+from torch.nn import functional as F
 from torch_utils import misc
 
 import legacy
@@ -145,22 +146,24 @@ def generate_images(
         theta_0 = [0] * 9
         phi_0 = [0] * 9
 
-        gw = 9
-        gh = 1
+        gw = 3
+        gh = 3
 
         batch_size = len(theta)
 
 
-        for seed_idx, seed in enumerate(seeds):
-            print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
-            z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
-            c2i = c2i_default.repeat(batch_size, 1, 1).to(device)
-            m2c = cal_m2c(theta, phi).to(device)
-            img = G(z.repeat(gw*gh,1), label.repeat(gw*gh,1), m2c, c2i, truncation_psi=truncation_psi, noise_mode=noise_mode)
-            # save_image_grid(img[:,:3].cpu(), f'{outdir}/rotation/seed{seed:04d}.png', drange=[-1,1], grid_size=(gw, gh))
-            for i in range(len(img)):
-                save_image(img[i, :3].cpu().clamp(-1,1) / 2 + 0.5, f'{outdir}/rotation/seed{seed:04d}_{i}.png')
-                # save_image(img[i, 3:6].cpu().clamp(-1, 1) / 2 + 0.5, f'{outdir}/rotation/seed{seed:04d}_{i}_low.png')
+        # for seed_idx, seed in enumerate(seeds):
+        #     print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
+        #     z = torch.from_numpy(np.random.RandomState(seed).randn(1, G.z_dim)).to(device)
+        #     c2i = c2i_default.repeat(batch_size, 1, 1).to(device)
+        #     m2c = cal_m2c(theta, phi).to(device)
+        #     img = G(z.repeat(gw*gh,1), label.repeat(gw*gh,1), m2c, c2i, truncation_psi=truncation_psi, noise_mode=noise_mode)
+        #     # save_image_grid(img[:,:3].cpu(), f'{outdir}/rotation/seed{seed:04d}.png', drange=[-1,1], grid_size=(gw, gh))
+        #     for i in range(len(img)):
+        #         save_image(img[i, :3].cpu().clamp(-1,1) / 2 + 0.5, f'{outdir}/rotation/seed{seed:04d}_{i}.png')
+        #         save_image(img[i, 3:6].cpu().clamp(-1, 1) / 2 + 0.5, f'{outdir}/rotation/seed{seed:04d}_{i}_low.png')
+        #         super_low = F.interpolate(F.interpolate(img[i:i+1, :3].cpu().clamp(-1,1) / 2 + 0.5, (32,32)), (128,128),mode='bilinear')
+        #         save_image(super_low[0], f'{outdir}/rotation/seed{seed:04d}_{i}_super_low_again.png')
 
         for seed_idx, seed in enumerate(seeds):
             print('Generating image for seed %d (%d/%d) ...' % (seed, seed_idx, len(seeds)))
@@ -169,10 +172,13 @@ def generate_images(
             m2c = cal_m2c(theta, phi).to(device)
             m2c_2 = cal_m2c(theta_0, phi_0).to(device)
             img = G(z.repeat(gw*gh,1), label.repeat(gw*gh,1), m2c, c2i, m2c_2=m2c_2, c2i_2=c2i, swap_prob=0, truncation_psi=truncation_psi, noise_mode=noise_mode)
-            # save_image_grid(img[:,:3].cpu(), f'{outdir}/rotation/gconfix_seed{seed:04d}.png', drange=[-1,1], grid_size=(gw, gh))
+            save_image_grid(img[:,:3].cpu(), f'{outdir}/rotation/gconfix_seed{seed:04d}.png', drange=[-1,1], grid_size=(gw, gh))
             for i in range(len(img)):
                 save_image(img[i, :3].cpu().clamp(-1,1) / 2 + 0.5, f'{outdir}/rotation/gconfix_seed{seed:04d}_{i}.png')
-                save_image(img[i, 3:6].cpu().clamp(-1,1) / 2 + 0.5, f'{outdir}/rotation/gconfix_seed{seed:04d}_{i}_low.png')
+                # save_image(img[i, 3:6].cpu().clamp(-1,1) / 2 + 0.5, f'{outdir}/rotation/gconfix_seed{seed:04d}_{i}_low.png')
+                # super_low = F.interpolate(F.interpolate(img[i:i + 1, :3].cpu().clamp(-1, 1) / 2 + 0.5, (32, 32)),
+                #                           (128, 128), mode='bilinear', align_corners=True)
+                # save_image(super_low[0], f'{outdir}/rotation/gconfix_seed{seed:04d}_{i}_super_low_again.png')
 
 
 # ---------------------------translation---------------------------------
@@ -187,8 +193,8 @@ def generate_images(
 
         translation = [[-0.1, 0, 0], [0, 0, 0], [0.1, 0, 0], [-0.1, 0.1, 0], [0, 0.1, 0], [0.1, 0.1, 0], [-0.1, -0.1, 0], [0, -0.1, 0], [0.1, -0.1, 0]]
 
-        gw = 9
-        gh = 1
+        gw = 3
+        gh = 3
         batch_size = len(theta)
 
         for seed_idx, seed in enumerate(seeds):
